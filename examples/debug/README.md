@@ -15,11 +15,6 @@ python examples/debug/axis.py \
    --port /dev/ttyACM0
 ```
 
-#### Disable torque for all arm motors
-```
-python examples/debug/motors.py reset_motors_torque  \
-  --port /dev/ttyACM0
-```
 
 #### Rotate a specific motor by ID
 ```
@@ -38,6 +33,21 @@ python examples/debug/motors.py configure_motor_id \
   --port /dev/ttyACM0
 ```
 
+#### Set the phase of a specified servo
+```
+python examples/debug/motors.py configure_motor_phase \
+  --id 1 \
+  --set_phase 12 \
+  --port /dev/ttyACM0
+```
+
+
+#### Set the phase for all servos
+```
+python examples/debug/motors.py configure_motor_phase \
+  --set_phase 12 \
+  --port /dev/ttyACM0
+```
 
 #### Reset current position as the motor midpoint
 ```
@@ -45,6 +55,11 @@ python examples/debug/motors.py reset_motors_to_midpoint \
   --port /dev/ttyACM1
 ```
 
+#### Disable torque for all arm motors
+```
+python examples/debug/motors.py reset_motors_torque  \
+  --port /dev/ttyACM0
+```
 
 #### Execute an action script on the robot arm
 ```
