@@ -126,8 +126,8 @@ lerobot-record \
 ```
 
 > AM-ARM200 Pro: replace `am-follower-6dof` with `am-follower-6dof-hd`.  
-> 摄像头名称（`cam_wrist`、`cam_top`）可自定义，会直接成为数据集的字段名，建议全程保持一致。  
-> 只用一个摄像头时删去 `cam_top` 那一项即可。
+> Camera names (`cam_wrist`, `cam_top`) are arbitrary but become dataset field names — keep them consistent across all recording sessions.  
+> To use a single camera, remove the `cam_top` entry.
 
 ---
 
