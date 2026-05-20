@@ -268,7 +268,7 @@ python examples/alohamini/evaluate_bi.py \
   --hf_dataset_id $HF_USER/eval_act_policy \
   --remote_ip <Pi_IP> \
   --robot_id my_alohamini \
-  --robot_model alohamini2pro
+  --robot_model alohamini2
 ```
 
 ### Option B — `lerobot-rollout` (official CLI)
@@ -280,7 +280,7 @@ python -m lerobot.scripts.lerobot_rollout \
   --strategy.type=base \
   --robot.type=alohamini_client \
   --robot.remote_ip=<Pi_IP> \
-  --robot.robot_model=alohamini2pro \
+  --robot.robot_model=alohamini2 \
   --policy.path=outputs/train/act_your_dataset1/checkpoints/020000/pretrained_model \
   --task="Pick and place task" \
   --fps=20 \
@@ -295,7 +295,7 @@ python -m lerobot.scripts.lerobot_rollout \
   --strategy.type=sentry \
   --robot.type=alohamini_client \
   --robot.remote_ip=<Pi_IP> \
-  --robot.robot_model=alohamini2pro \
+  --robot.robot_model=alohamini2 \
   --policy.path=outputs/train/act_your_dataset1/checkpoints/020000/pretrained_model \
   --dataset.repo_id=$HF_USER/rollout_eval1 \
   --task="Pick and place task" \
