@@ -3,7 +3,7 @@
 from email import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import HF_LEROBOT_HOME
-from lerobot.datasets.feature_utils import hw_to_dataset_features
+from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
 from lerobot.robots.alohamini.config_lekiwi import LeKiwiClientConfig
 from lerobot.robots.alohamini.lekiwi_client import LeKiwiClient
@@ -12,7 +12,7 @@ from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
 from lerobot.teleoperators.so_leader import SOLeaderConfig
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.common.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
@@ -46,11 +46,11 @@ def main():
     robot_config = LeKiwiClientConfig(remote_ip=args.remote_ip, id=args.robot_id)
     leader_arm_config = BiSOLeaderConfig(
         left_arm_config=SOLeaderConfig(
-            port="/dev/am_arm_leader_left",
+            port="/dev/ttyACM0",
             arm_profile=args.arm_profile,
         ),
         right_arm_config=SOLeaderConfig(
-            port="/dev/am_arm_leader_right",
+            port="/dev/ttyACM1",
             arm_profile=args.arm_profile,
         ),
         id=args.leader_id,

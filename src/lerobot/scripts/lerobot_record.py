@@ -261,7 +261,7 @@ def record_loop(
             None,
         )
 
-        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name == "lekiwi_client"):
+        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name in ("lekiwi_client", "alohamini_client")):
             raise ValueError(
                 f"For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. "
                 f"Currently only supported for LeKiwi robot.\n"
