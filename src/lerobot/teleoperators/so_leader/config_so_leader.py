@@ -29,7 +29,7 @@ class SOLeaderConfig:
     # Whether to use degrees for angles
     use_degrees: bool = True
 
-    # Arm profile selector: "so-arm" (5-DoF) or "am-arm" (6-DoF)
+    # Arm profile selector: "so-arm-5dof" or "am-leader-6dof".
     arm_profile: str = "so-arm-5dof"
 
 

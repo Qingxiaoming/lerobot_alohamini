@@ -40,6 +40,9 @@ class SOFollowerConfig:
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = True
+    # Supported AM profiles:
+    #   am-follower-6dof    – AM-ARM200 follower
+    #   am-follower-6dof-hd – AM-ARM200 Pro follower
     arm_profile: str = "so-arm-5dof"
 
 

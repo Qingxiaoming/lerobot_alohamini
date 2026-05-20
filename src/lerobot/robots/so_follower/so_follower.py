@@ -34,6 +34,48 @@ from .config_so_follower import SOFollowerRobotConfig
 logger = logging.getLogger(__name__)
 
 
+_ARM_PROFILES: dict[str, tuple[tuple[str, int, str, MotorNormMode | None], ...]] = {
+    "so-arm-5dof": (
+        ("shoulder_pan", 1, "sts3215", None),
+        ("shoulder_lift", 2, "sts3215", None),
+        ("elbow_flex", 3, "sts3215", None),
+        ("wrist_flex", 4, "sts3215", None),
+        ("wrist_roll", 5, "sts3215", None),
+        ("gripper", 6, "sts3215", MotorNormMode.RANGE_0_100),
+    ),
+    "am-follower-6dof": (
+        ("shoulder_pan", 1, "sts3095", None),
+        ("shoulder_lift", 2, "sts3095", None),
+        ("elbow_flex", 3, "sts3095", None),
+        ("wrist_flex", 4, "sts3215", None),
+        ("wrist_yaw", 5, "sts3215", None),
+        ("wrist_roll", 6, "sts3215", None),
+        ("gripper", 7, "sts3215", MotorNormMode.RANGE_0_100),
+    ),
+    "am-follower-6dof-hd": (
+        ("shoulder_pan", 1, "sts3250", None),
+        ("shoulder_lift", 2, "sts3095", None),
+        ("elbow_flex", 3, "sts3095", None),
+        ("wrist_flex", 4, "sts3250", None),
+        ("wrist_yaw", 5, "sts3250", None),
+        ("wrist_roll", 6, "sts3250", None),
+        ("gripper", 7, "sts3250", MotorNormMode.RANGE_0_100),
+    ),
+}
+
+
+def _make_motors(arm_profile: str, norm_mode_body: MotorNormMode) -> dict[str, Motor]:
+    if arm_profile not in _ARM_PROFILES:
+        raise ValueError(
+            f"Unknown arm_profile '{arm_profile}'. Expected one of: {list(_ARM_PROFILES.keys())}."
+        )
+
+    return {
+        joint: Motor(motor_id, model, norm_mode or norm_mode_body)
+        for joint, motor_id, model, norm_mode in _ARM_PROFILES[arm_profile]
+    }
+
+
 class SOFollower(Robot):
     """
     Generic SO follower base implementing common functionality for SO-100/101/10X.
@@ -48,30 +90,7 @@ class SOFollower(Robot):
         self.config = config
         # choose normalization mode depending on config if available
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
-        if config.arm_profile == "am-arm-6dof":
-            motors = {
-
-                "shoulder_pan": Motor(1, "sts3250", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3095", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3095", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3250", norm_mode_body),
-                "wrist_yaw": Motor(5, "sts3250", norm_mode_body),
-                "wrist_roll": Motor(6, "sts3250", norm_mode_body),
-                "gripper": Motor(7, "sts3250", MotorNormMode.RANGE_0_100),
-            }
-        elif config.arm_profile == "so-arm-5dof":
-            motors = {
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
-            }
-        else:
-            raise ValueError(
-                f"Unknown arm_profile '{config.arm_profile}'. Expected 'so-arm-5dof' or 'am-arm-6dof'."
-            )
+        motors = _make_motors(config.arm_profile, norm_mode_body)
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors=motors,
@@ -80,7 +99,7 @@ class SOFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         self._last_current_print_ts = 0.0
         self._overcurrent_count: dict[str, int] = {}
-        self._overcurrent_limit_ma = 2000.0
+        self._overcurrent_limit_ma = 2500.0
         self._overcurrent_trip_n = 20
 
     @property
