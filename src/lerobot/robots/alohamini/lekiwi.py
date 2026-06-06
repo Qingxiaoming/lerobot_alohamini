@@ -64,7 +64,7 @@ _ARM_PROFILES: dict[str, tuple[tuple[str, int, str, MotorNormMode | None], ...]]
         ("gripper", 7, "sts3215", MotorNormMode.RANGE_0_100),
     ),
     "am-follower-6dof": (
-        ("shoulder_pan", 1, "sts3215", None),
+        ("shoulder_pan", 1, "sts3095", None),
         ("shoulder_lift", 2, "sts3095", None),
         ("elbow_flex", 3, "sts3095", None),
         ("wrist_flex", 4, "sts3215", None),
