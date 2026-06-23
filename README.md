@@ -10,13 +10,22 @@ Shared software layer for the AlohaMini product line, built on HuggingFace LeRob
 
 ## Documentation
 
-| Guide | Description |
-|-------|-------------|
-| [Install](docs/alohamini/install.md) | Environment setup, serial port permissions, HuggingFace configuration |
-| [Hardware Profiles](docs/alohamini/profiles.md) | `--arm_profile` and `--robot_model` flag reference |
-| [Command Cheat Sheet](docs/alohamini/commands.md) | Common setup, host, teleoperation, recording, training, evaluation, and debug commands |
-| [AM-ARM200](docs/alohamini/am-arm200.md) | Calibration → teleoperation → dataset recording → training → evaluation (single arm, one PC) |
-| [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/alohamini.md) | Calibration → teleoperation → dataset recording → training → evaluation (dual arm, Pi + PC) |
+Start with setup, then follow the workflow for your hardware. Use the reference pages when you need exact flags, commands, or low-level debug tools.
+
+### Recommended Path
+
+1. [Install](docs/alohamini/install.md) — prepare the environment, serial port permissions, and Hugging Face login.
+2. Pick your robot workflow:
+   - [AM-ARM200](docs/alohamini/am-arm200.md) — single-arm workflow on one PC: calibration, teleoperation, dataset recording, training, and evaluation.
+   - [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/alohamini.md) — dual-arm workflow with Pi + PC: calibration, teleoperation, dataset recording, training, and evaluation.
+
+### References
+
+| Reference | Use it for |
+|-----------|------------|
+| [Hardware Profiles](docs/alohamini/profiles.md) | `--arm_profile` and `--robot_model` flag meanings |
+| [Command Cheat Sheet](docs/alohamini/commands.md) | Copy-paste commands for setup, host, teleoperation, recording, training, evaluation, and common checks |
+| [Debug Tools](examples/debug/README.md) | Low-level motor, wheel, lift axis, servo ID, phase, midpoint, torque, and scripted-action debug functions |
 
 ---
 
