@@ -37,8 +37,12 @@ PYNPUT_AVAILABLE = _pynput_available
 keyboard = None
 if PYNPUT_AVAILABLE:
     try:
-        if ("DISPLAY" not in os.environ) and ("linux" in sys.platform):
-            logging.info("No DISPLAY set. Skipping pynput import.")
+        if (
+            ("DISPLAY" not in os.environ)
+            and ("WAYLAND_DISPLAY" not in os.environ)
+            and ("linux" in sys.platform)
+        ):
+            logging.info("No DISPLAY or WAYLAND_DISPLAY set. Skipping pynput import.")
             PYNPUT_AVAILABLE = False
         else:
             from pynput import keyboard
