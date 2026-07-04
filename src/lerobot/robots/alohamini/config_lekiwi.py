@@ -100,7 +100,7 @@ class LeKiwiClientConfig(RobotConfig):
     # alohamini1   – so-arm-5dof (6 joints per arm, no wrist_yaw)
     # alohamini2   – am-follower-6dof (7 joints per arm, includes wrist_yaw)
     # alohamini2pro– am-follower-6dof-hd (7 joints per arm, includes wrist_yaw)
-    robot_model: str = "alohamini1"
+    robot_model: str = "alohamini2pro"
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {

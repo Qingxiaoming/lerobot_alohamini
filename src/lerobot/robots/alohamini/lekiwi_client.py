@@ -86,6 +86,7 @@ class LeKiwiClient(Robot):
         self._left_arm_state_keys, self._right_arm_state_keys = arm_state_keys_for_robot_model(
             config.robot_model
         )
+        print(f"[DEBUG] robot_model={config.robot_model}, _state_order len={len(self._state_order)}, keys={self._state_order}")
 
     @property
     def _state_ft(self) -> dict[str, type]:
@@ -209,9 +210,11 @@ class LeKiwiClient(Robot):
     ) -> tuple[dict[str, np.ndarray], RobotObservation]:
         """Extracts frames, and state from the parsed observation."""
 
+        print(f"[DEBUG] Received observation keys: {sorted(observation.keys())}")
         flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
 
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
+        print(f"[DEBUG] state_vec shape: {state_vec.shape}")
 
         obs_dict: RobotObservation = {**flat_state, OBS_STATE: state_vec}
         #lineno = frame.f_lineno

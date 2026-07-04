@@ -579,7 +579,7 @@ class LeKiwi(Robot):
 
         obs_dict = {**left_arm_state, **right_arm_state,**base_vel}
         self.lift.contribute_observation(obs_dict)
-        #print(f"Observation dict so far: {obs_dict}")  # debug
+        print(f"[DEBUG] get_observation keys: {sorted(obs_dict.keys())}")  # debug
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")

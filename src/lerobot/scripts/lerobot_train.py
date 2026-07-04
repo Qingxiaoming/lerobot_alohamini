@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 import torch
 from termcolor import colored
 from torch.optim import Optimizer
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from lerobot.common.train_utils import (
@@ -211,8 +212,16 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     init_logging(accelerator=accelerator)
 
+    # TensorBoard writer (only on main process)
+    tensorboard_writer = None
+    if accelerator.is_main_process:
+        tb_log_dir = cfg.output_dir / "runs"
+        tb_log_dir.mkdir(parents=True, exist_ok=True)
+        tensorboard_writer = SummaryWriter(log_dir=tb_log_dir)
+        logging.info(f"TensorBoard logs will be saved to {tb_log_dir}")
+
     # Determine if this is the main process (for logging and checkpointing)
-    # When using accelerate, only the main process should log to avoid duplicate outputs
+    # When using accelerate, only the main process should log to avoid duplicate output
     is_main_process = accelerator.is_main_process
 
     # Only log on main process
@@ -546,6 +555,16 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
                 logging.info(train_tracker)
+                if tensorboard_writer is not None:
+                    for key, value in train_tracker.to_dict().items():
+                        tensorboard_writer.add_scalar(f"train/{key}", value, step)
+                    if output_dict:
+                        for key, value in output_dict.items():
+                            tensorboard_writer.add_scalar(f"train/{key}", value, step)
+                    if sample_weighter is not None:
+                        for key, value in sample_weighter.get_stats().items():
+                            tensorboard_writer.add_scalar(f"sample_weighting/{key}", value, step)
+                    tensorboard_writer.flush()
                 if wandb_logger:
                     wandb_log_dict = train_tracker.to_dict()
                     if output_dict:
@@ -630,6 +649,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if is_main_process:
         progbar.close()
+        if tensorboard_writer is not None:
+            tensorboard_writer.close()
 
     if eval_env:
         close_envs(eval_env)

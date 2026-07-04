@@ -2,6 +2,7 @@
 
 import argparse
 import time
+from pathlib import Path
 
 import lerobot.robots.alohamini  # noqa: F401 — registers alohamini_client robot type
 
@@ -13,7 +14,7 @@ from lerobot.processor import make_default_processors
 from lerobot.rollout.inference.factory import SyncInferenceConfig, create_inference_engine
 from lerobot.rollout.robot_wrapper import ThreadSafeRobot
 from lerobot.robots.alohamini import LeKiwiClient, LeKiwiClientConfig
-from lerobot.utils.constants import ACTION, OBS_STR
+from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.device_utils import auto_select_torch_device
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts, hw_to_dataset_features
 from lerobot.utils.robot_utils import precise_sleep
@@ -34,6 +35,8 @@ def main():
     parser.add_argument("--robot_model", type=str, default="alohamini1",
                         choices=["alohamini1", "alohamini2", "alohamini2pro"],
                         help="Must match the robot_model on the Pi host side")
+    parser.add_argument("--no_record", action="store_true",
+                        help="Run policy without recording frames to dataset")
     args = parser.parse_args()
 
     device = str(auto_select_torch_device())
@@ -75,8 +78,19 @@ def main():
     ordered_action_keys = list(action_features_hw.keys())
 
     # === Dataset ===
+    dataset_repo_id = args.hf_dataset_id
+    dataset_root = Path(HF_LEROBOT_HOME) / dataset_repo_id
+    if dataset_root.exists():
+        base_repo_id = dataset_repo_id
+        suffix = 1
+        while dataset_root.exists():
+            dataset_repo_id = f"{base_repo_id}_{suffix}"
+            dataset_root = Path(HF_LEROBOT_HOME) / dataset_repo_id
+            suffix += 1
+        print(f"Dataset directory already exists. Using auto-incremented repo_id: {dataset_repo_id}")
+
     dataset = LeRobotDataset.create(
-        repo_id=args.hf_dataset_id,
+        repo_id=dataset_repo_id,
         fps=args.fps,
         features=dataset_features,
         robot_type=robot.name,
@@ -127,24 +141,31 @@ def main():
             obs_frame = build_dataset_frame(dataset_features, obs_processed, prefix=OBS_STR)
 
             action_tensor = engine.get_action(obs_frame)
+            print("action_tensor:", action_tensor)
+            from lerobot.utils.visualization_utils import log_rerun_data
+            log_rerun_data(observation=obs_processed)
             if action_tensor is not None:
                 action_dict = {k: action_tensor[i].item() for i, k in enumerate(ordered_action_keys)}
+                print("action_dict:", action_dict)
                 robot.send_action(robot_action_processor((action_dict, obs_raw)))
-                action_frame = build_dataset_frame(dataset_features, action_dict, prefix=ACTION)
-                dataset.add_frame({**obs_frame, **action_frame, "task": args.task_description})
+                if not args.no_record:
+                    action_frame = build_dataset_frame(dataset_features, action_dict, prefix=ACTION)
+                    dataset.add_frame({**obs_frame, **action_frame, "task": args.task_description})
 
             dt = time.perf_counter() - loop_start
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
 
-        dataset.save_episode()
+        if not args.no_record:
+            dataset.save_episode()
         recorded += 1
 
     log_say("Evaluation complete")
     engine.stop()
     robot.disconnect()
-    dataset.finalize()
-    dataset.push_to_hub()
+    if not args.no_record:
+        dataset.finalize()
+    # dataset.push_to_hub()  # commented out for local-only evaluation
 
 
 if __name__ == "__main__":
