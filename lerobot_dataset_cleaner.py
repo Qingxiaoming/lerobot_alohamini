@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -830,8 +831,8 @@ def clean_dataset(
         data_path = output_path / "data" / f"chunk-{new_ep_idx:03d}" / "file-000.parquet"
         write_data_parquet(df, target_data_schema, data_path)
 
-        # 处理视频（per-episode 模式）
-        for cam in camera_keys:
+        # 处理视频（per-episode 模式）- 并行处理多个摄像头
+        def process_camera(cam):
             if videos_present:
                 extract_or_copy_episode_video(
                     input_path,
@@ -843,6 +844,10 @@ def clean_dataset(
                     keep_ranges=keep,
                     always_reencode=remove_frozen,
                 )
+
+        if camera_keys:
+            with ThreadPoolExecutor(max_workers=len(camera_keys)) as executor:
+                executor.map(process_camera, camera_keys)
 
         # episodes 元数据行
         row = {
@@ -1146,7 +1151,8 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
             elif len(tasks_src) > 0 and "task_index" in df.columns:
                 row["tasks"] = [str(tasks_src.index[int(t)]) for t in df["task_index"].unique()]
 
-            for cam in camera_keys:
+            # 并行处理多个摄像头的视频提取
+            def process_camera(cam):
                 chunk_idx = int(ep_meta.get(f"videos/{cam}/chunk_index", 0))
                 file_idx = int(ep_meta.get(f"videos/{cam}/file_index", 0))
                 from_ts = float(ep_meta.get(f"videos/{cam}/from_timestamp", 0.0))
@@ -1162,10 +1168,15 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
                 else:
                     print(f"  WARNING: video not found for episode {old_ep_idx}, camera {cam}")
 
-                row[f"videos/{cam}/chunk_index"] = new_ep_idx
-                row[f"videos/{cam}/file_index"] = 0
-                row[f"videos/{cam}/from_timestamp"] = 0.0
-                row[f"videos/{cam}/to_timestamp"] = length / base_fps
+                return cam, new_ep_idx
+
+            with ThreadPoolExecutor(max_workers=len(camera_keys)) as executor:
+                results = executor.map(process_camera, camera_keys)
+                for cam, ep_idx in results:
+                    row[f"videos/{cam}/chunk_index"] = ep_idx
+                    row[f"videos/{cam}/file_index"] = 0
+                    row[f"videos/{cam}/from_timestamp"] = 0.0
+                    row[f"videos/{cam}/to_timestamp"] = length / base_fps
 
             episode_rows.append(row)
             global_frame_idx += length
