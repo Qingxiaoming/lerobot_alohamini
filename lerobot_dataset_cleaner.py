@@ -32,7 +32,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from lerobot.datasets.compute_stats import RunningQuantileStats
+from lerobot.datasets.compute_stats import RunningQuantileStats, estimate_num_samples
 from lerobot.datasets.utils import serialize_dict
 
 
@@ -571,33 +571,83 @@ def sample_video_frames(video_path: Path, max_samples: int = 50) -> Optional[np.
     return arr
 
 
+def auto_downsample_height_width(img: np.ndarray, target_size: int = 150, max_size_threshold: int = 300):
+    """与 LeRobot 官方一致的图像降采样策略。"""
+    _, height, width = img.shape
+    if max(width, height) < max_size_threshold:
+        return img
+    downsample_factor = int(width / target_size) if width > height else int(height / target_size)
+    return img[:, ::downsample_factor, ::downsample_factor]
+
+
 def compute_video_feature_stats(root: Path, feature_key: str, info: dict,
-                                max_samples_per_video: int = 50) -> Optional[dict]:
-    """计算某个 video feature 的 per-channel 统计量（归一化到 [0,1]）。"""
-    sampled = []
+                                skip_video_stats: bool = False) -> Optional[dict]:
+    """计算某个 video feature 的 per-channel 统计量（归一化到 [0,1]）。
+    
+    使用与 LeRobot 官方一致的策略：
+    - 根据数据集大小自动估计采样数量
+    - 图像降采样到最大 150px
+    - 使用 RunningQuantileStats 计算分位数
+    """
+    if skip_video_stats:
+        print(f"  Skipping video stats for {feature_key}")
+        return None
+    
     total_eps = info["total_episodes"]
-    for ep_idx in tqdm(range(total_eps), desc=f"Video stats [{feature_key}]", leave=False):
+    video_paths = []
+    for ep_idx in range(total_eps):
         video_path = root / "videos" / feature_key / f"chunk-{ep_idx:03d}" / "file-000.mp4"
-        frames = sample_video_frames(video_path, max_samples_per_video)
+        if video_path.exists():
+            video_paths.append(video_path)
+    
+    if not video_paths:
+        return None
+    
+    # 使用官方策略估计采样数量
+    total_frames = sum(get_video_frame_count(vp) for vp in video_paths)
+    num_samples = estimate_num_samples(total_frames, min_num_samples=100, max_num_samples=10000)
+    samples_per_video = max(1, num_samples // len(video_paths))
+    
+    print(f"  Video stats [{feature_key}]: {len(video_paths)} videos, ~{samples_per_video} frames/video")
+    
+    sampled = []
+    for video_path in tqdm(video_paths, desc=f"Video stats [{feature_key}]", leave=False):
+        frames = sample_video_frames(video_path, samples_per_video)
         if frames is not None:
+            # 应用图像降采样
+            frames = np.stack([auto_downsample_height_width(f) for f in frames])
             sampled.append(frames)
+    
     if not sampled:
         return None
+    
     arr = np.concatenate(sampled, axis=0).astype(np.float32) / 255.0
-    axes = (0, 2, 3)
-    stats = {
-        "mean": arr.mean(axis=axes, keepdims=True),
-        "std": arr.std(axis=axes, keepdims=True),
-        "min": arr.min(axis=axes, keepdims=True),
-        "max": arr.max(axis=axes, keepdims=True),
-    }
-    for q in [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]:
-        stats[f"q{int(q * 100):02d}"] = np.quantile(arr, q, axis=axes, keepdims=True)
-    return stats
+    
+    # 使用 RunningQuantileStats 计算统计量
+    reshaped = arr.transpose(0, 2, 3, 1).reshape(-1, arr.shape[1])
+    running_stats = RunningQuantileStats()
+    running_stats.update(reshaped)
+    stats = running_stats.get_statistics()
+    
+    # 转换为 per-channel 格式 (3, 1, 1)
+    per_channel = {}
+    for key, value in stats.items():
+        if key == "count":
+            per_channel[key] = value
+        else:
+            per_channel[key] = value.reshape(-1, 1, 1)
+    
+    return per_channel
 
 
-def recompute_stats(root: Path, info: dict) -> dict:
-    """使用 LeRobot 的 RunningQuantileStats 重新计算 stats.json，并补充 video feature 统计。"""
+def recompute_stats(root: Path, info: dict, skip_video_stats: bool = False) -> dict:
+    """使用 LeRobot 的 RunningQuantileStats 重新计算 stats.json，并补充 video feature 统计。
+    
+    Args:
+        root: 数据集根目录
+        info: info.json 内容
+        skip_video_stats: 是否跳过视频特征统计
+    """
     features = info.get("features", {})
     numeric_dtypes = {"float32", "float64", "int32", "int64"}
 
@@ -635,11 +685,14 @@ def recompute_stats(root: Path, info: dict) -> dict:
         stats[key] = {k: np.asarray(v) for k, v in s.items()}
 
     # 为 video feature 计算 per-channel 统计
-    for key, ft in features.items():
-        if ft.get("dtype") == "video":
-            video_stats = compute_video_feature_stats(root, key, info)
-            if video_stats is not None:
-                stats[key] = video_stats
+    if not skip_video_stats:
+        for key, ft in features.items():
+            if ft.get("dtype") == "video":
+                video_stats = compute_video_feature_stats(root, key, info)
+                if video_stats is not None:
+                    stats[key] = video_stats
+    else:
+        print("  Skipping video feature stats calculation")
 
     return stats
 
@@ -658,6 +711,7 @@ def clean_dataset(
     downsample_fps: Optional[float] = None,
     drop_video_features_if_missing: bool = False,
     min_episode_length: int = 0,
+    skip_video_stats: bool = False,
 ) -> Path:
     input_path = Path(input_path).expanduser().resolve()
     output_path = Path(output_path).expanduser().resolve()
@@ -685,6 +739,16 @@ def clean_dataset(
 
     if not kept_old_eps:
         raise ValueError("No episodes left after deletion.")
+
+    # 删除比例警告
+    total_eps = len(episodes)
+    deleted_count = len(to_delete)
+    if deleted_count > 0:
+        delete_ratio = deleted_count / total_eps
+        print(f"  Deletion ratio: {deleted_count}/{total_eps} ({delete_ratio*100:.1f}%)")
+        if delete_ratio > 0.3 and skip_video_stats:
+            print("  ⚠️  WARNING: Deleting more than 30% of episodes with --skip-video-stats!")
+            print("     Video statistics may be significantly outdated. Consider running without --skip-video-stats.")
 
     # 视频处理
     videos_present = has_any_video(input_path, info)
@@ -829,7 +893,7 @@ def clean_dataset(
 
     # 重新计算 stats
     print("\nRecomputing statistics...")
-    stats = recompute_stats(output_path, new_info)
+    stats = recompute_stats(output_path, new_info, skip_video_stats=skip_video_stats)
     save_json(output_path / "meta" / "stats.json", serialize_dict(stats))
 
     print(f"\nDone: {output_path}")
@@ -935,13 +999,16 @@ def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: floa
         return False
 
 
-def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fps: Optional[float] = None):
+def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fps: Optional[float] = None,
+                           skip_video_stats: bool = False):
     """合并多个 LeRobot 数据集，输出为规范 v3.0 per-episode 格式。
 
     不依赖 LeRobotDataset/aggregate_datasets，因此能处理：
       - 数据文件命名不规范（episode_xxx.parquet）
       - video.fps 元数据不一致
       - 多 episode 共享一个 data/video 文件（会根据 metadata 的 timestamp 裁剪视频）
+      
+    对于单数据集格式转换，直接拷贝原 stats.json 以保持准确性。
     """
     input_paths = [Path(p).expanduser().resolve() for p in input_paths]
     output_path = Path(output_path).expanduser().resolve()
@@ -1126,10 +1193,23 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
 
     save_info(output_path, new_info)
 
-    # 重新计算 stats
-    print("\nRecomputing statistics...")
-    stats = recompute_stats(output_path, new_info)
-    save_json(output_path / "meta" / "stats.json", serialize_dict(stats))
+    # 统计计算：单数据集转换时直接拷贝原 stats.json，多数据集合并时重新计算
+    print("\nHandling statistics...")
+    if len(input_paths) == 1 and not target_fps:
+        # 单数据集格式转换，直接拷贝原 stats.json
+        src_stats_path = input_paths[0] / "meta" / "stats.json"
+        if src_stats_path.exists():
+            print("  Copying original stats.json (single dataset format conversion)")
+            shutil.copy2(src_stats_path, output_path / "meta" / "stats.json")
+        else:
+            print("  Recomputing stats (original not found)")
+            stats = recompute_stats(output_path, new_info, skip_video_stats=skip_video_stats)
+            save_json(output_path / "meta" / "stats.json", serialize_dict(stats))
+    else:
+        # 多数据集合并或 FPS 转换，重新计算 stats
+        print("  Recomputing stats (multi-dataset merge or FPS conversion)")
+        stats = recompute_stats(output_path, new_info, skip_video_stats=skip_video_stats)
+        save_json(output_path / "meta" / "stats.json", serialize_dict(stats))
 
     print(f"\nMerge complete: {output_path}")
     print(f"  Episodes: {new_ep_idx} | Frames: {global_frame_idx}")
@@ -1177,11 +1257,15 @@ Examples:
                          help="即使视频文件缺失也保留 video feature（会导致 LeRobotDataset 加载失败，仅在后续补视频时使用）")
     clean_p.add_argument("--min-episode-length", type=int, default=0,
                          help="清洗后长度小于该值的 episode 会被丢弃（默认 0，不丢弃）")
+    clean_p.add_argument("--skip-video-stats", action="store_true",
+                         help="跳过视频特征统计计算（大幅加速，约 10x）")
     clean_p.add_argument("--output", type=str, required=True)
 
     merge_p = subparsers.add_parser("merge", help="合并数据集")
     merge_p.add_argument("datasets", type=str, nargs="+", help="输入数据集路径")
     merge_p.add_argument("--target-fps", type=float, default=None)
+    merge_p.add_argument("--skip-video-stats", action="store_true",
+                         help="跳过视频特征统计计算（仅在多数据集合并或 FPS 转换时生效）")
     merge_p.add_argument("--output", type=str, required=True)
 
     args = parser.parse_args()
@@ -1197,12 +1281,14 @@ Examples:
             downsample_fps=args.downsample_fps,
             drop_video_features_if_missing=not args.keep_video_features_if_missing,
             min_episode_length=args.min_episode_length,
+            skip_video_stats=args.skip_video_stats,
         )
     elif args.command == "merge":
         merge_datasets_command(
             input_paths=[Path(p) for p in args.datasets],
             output_path=Path(args.output),
             target_fps=args.target_fps,
+            skip_video_stats=args.skip_video_stats,
         )
     else:
         parser.print_help()
