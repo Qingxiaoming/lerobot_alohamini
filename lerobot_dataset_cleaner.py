@@ -6,8 +6,8 @@ LeRobot Dataset Cleaner & Merger (v3.0-aware)
 
 特性：
 - clean: 删除指定 episode、删除 frozen 帧、降采样 FPS、重新组织 chunk
-- merge: 合并多个数据集，支持自动 FPS 对齐；底层调用 LeRobot 官方 aggregate_datasets
-          以保证视频合并正确。
+- merge: 合并多个数据集，支持自动 FPS 对齐；输出为一集一个 parquet / 一集一个视频。
+          官方 aggregate_datasets 不提供该输出布局，因此这里使用自实现的 metadata 驱动转换。
 - 重新计算 stats.json（与 LeRobot 内部 RunningQuantileStats 一致，包含 quantiles）。
 - 输出格式为 LeRobot v3.0，每个 episode 独占一个 chunk（data/chunk-{ep:03d}/file-000.parquet），
   从而消除 data/meta mismatch。
@@ -17,6 +17,7 @@ LeRobot Dataset Cleaner & Merger (v3.0-aware)
 """
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -34,6 +35,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from lerobot.datasets.compute_stats import RunningQuantileStats, estimate_num_samples
+from lerobot.datasets.feature_utils import features_equal_for_merge
 from lerobot.datasets.utils import serialize_dict
 
 
@@ -206,20 +208,33 @@ def downsample_video(input_path: Path, output_path: Path, source_fps: float, tar
 # =============================================================================
 
 def find_frozen_frames(actions: np.ndarray, threshold: float = 0.001,
-                       min_consecutive_frames: int = 3) -> Set[int]:
+                       min_consecutive_frames: int = 3,
+                       weights: Optional[np.ndarray] = None) -> Set[int]:
     """
     检测需要删除的 frozen 帧。
 
-    规则：若连续 `min_consecutive_frames` 帧的 action L2 变化量 < threshold，
-    只保留该段的第一帧，删除其余帧。
+    规则：若连续 `min_consecutive_frames` 帧的 action 每个维度变化量（可加权重）
+    都 < threshold，只保留该段的第一帧，删除其余帧。
+
+    使用 per-dimension 判断而非 L2 范数，避免大尺度维度（如机械臂角度）淹没
+    小尺度维度（如轮子速度）的变化，导致"轮子动但机械臂不动"被误判为静止。
+
+    Args:
+        actions: 形状为 (T, D) 的 action 数组
+        threshold: 变化阈值
+        min_consecutive_frames: 最少连续静止帧数才删除
+        weights: 形状为 (D,) 的权重数组，用于放大/缩小特定维度的变化量
 
     返回：需要删除的帧索引（0-based）。
     """
     if len(actions) < 2:
         return set()
 
-    diffs = np.linalg.norm(np.diff(actions, axis=0), axis=1)
-    frozen = diffs < threshold
+    # 按维度分别判断，所有维度都静止才算静止
+    diffs = np.abs(np.diff(actions, axis=0))
+    if weights is not None:
+        diffs = diffs * weights
+    frozen = np.all(diffs < threshold, axis=1)
 
     to_remove = set()
     i = 0
@@ -709,6 +724,7 @@ def clean_dataset(
     remove_frozen: bool = False,
     frozen_threshold: float = 0.001,
     frozen_min_frames: int = 3,
+    frozen_vel_scale: float = 1.0,
     downsample_fps: Optional[float] = None,
     drop_video_features_if_missing: bool = False,
     min_episode_length: int = 0,
@@ -791,6 +807,16 @@ def clean_dataset(
     new_info["total_frames"] = 0
     new_info["splits"] = {"train": f"0:{len(kept_old_eps)}"}
 
+    # 为 frozen 检测构建维度权重：给轮子速度维度加权
+    action_feature = info.get("features", {}).get("action", {})
+    action_names = action_feature.get("names", [])
+    frozen_weights = None
+    if remove_frozen and frozen_vel_scale != 1.0 and action_names:
+        frozen_weights = np.ones(len(action_names), dtype=np.float64)
+        for i, name in enumerate(action_names):
+            if name in ("x.vel", "y.vel", "theta.vel"):
+                frozen_weights[i] = frozen_vel_scale
+
     episode_rows = []
     global_frame_idx = 0
     total_removed_frozen = 0
@@ -809,7 +835,7 @@ def clean_dataset(
         keep = None
         if remove_frozen and "action" in df.columns and len(df) >= 2:
             actions = np.stack([np.asarray(a, dtype=np.float64) for a in df["action"].values])
-            frozen = find_frozen_frames(actions, frozen_threshold, frozen_min_frames)
+            frozen = find_frozen_frames(actions, frozen_threshold, frozen_min_frames, frozen_weights)
             if frozen:
                 total_removed_frozen += len(frozen)
                 keep_mask = ~df.index.isin(frozen)
@@ -955,6 +981,74 @@ def resolve_video_file(root: Path, camera_key: str, chunk_index: int, file_index
     return f if f.exists() else None
 
 
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_merge_paths(input_paths: List[Path], output_path: Path):
+    if not input_paths:
+        raise ValueError("No input datasets were provided.")
+
+    for p in input_paths:
+        if not (p / "meta" / "info.json").exists():
+            raise FileNotFoundError(f"No info.json found in {p}")
+
+        # Writing inside a source dataset can make glob-based readers consume the
+        # partially-written output, or delete the source outright if paths match.
+        if output_path == p or path_is_relative_to(output_path, p):
+            raise ValueError(
+                f"Refusing to write output inside an input dataset: output={output_path}, input={p}"
+            )
+        if path_is_relative_to(p, output_path):
+            raise ValueError(
+                f"Refusing to write output above an input dataset: output={output_path}, input={p}"
+            )
+
+
+def validate_merge_compatibility(sources: List[Path], target_fps: Optional[float]) -> None:
+    base_info = load_info(sources[0])
+    base_fps = float(base_info.get("fps", 30.0))
+    base_robot_type = base_info.get("robot_type")
+    base_features = base_info.get("features", {})
+
+    for src in sources[1:]:
+        info = load_info(src)
+        src_fps = float(info.get("fps", 30.0))
+        if target_fps is None and abs(src_fps - base_fps) > 1e-6:
+            raise ValueError(
+                "Merge inputs have different FPS. Pass --target-fps to explicitly resample them "
+                f"or normalize them first. Got {sources[0].name}={base_fps}, {src.name}={src_fps}."
+            )
+        if info.get("robot_type") != base_robot_type:
+            raise ValueError(
+                f"Merge inputs have different robot_type: {sources[0].name}={base_robot_type}, "
+                f"{src.name}={info.get('robot_type')}"
+            )
+        if not features_equal_for_merge(base_features, info.get("features", {})):
+            raise ValueError(
+                f"Merge inputs have incompatible features: {sources[0].name} and {src.name}."
+            )
+
+
+def build_task_index_maps(tasks: pd.DataFrame, merged_tasks: pd.DataFrame) -> Tuple[Dict[int, int], Dict[int, str]]:
+    src_index_to_name: Dict[int, str] = {}
+    dst_index_by_name = {task: int(row["task_index"]) for task, row in merged_tasks.iterrows()}
+
+    for task_name, row in tasks.iterrows():
+        src_index_to_name[int(row["task_index"])] = str(task_name)
+
+    src_to_dst = {
+        src_idx: dst_index_by_name[task_name]
+        for src_idx, task_name in src_index_to_name.items()
+        if task_name in dst_index_by_name
+    }
+    return src_to_dst, src_index_to_name
+
+
 def load_source_episodes(root: Path) -> Tuple[dict, pd.DataFrame, List[dict]]:
     """加载源数据集的 info、tasks 和 episodes 元数据行。"""
     info = load_info(root)
@@ -976,6 +1070,10 @@ def load_source_episodes(root: Path) -> Tuple[dict, pd.DataFrame, List[dict]]:
 def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: float, target_fps: float):
     """从源视频按时间戳裁剪一段，并统一输出为 target_fps 的 H.264。
 
+    优化：
+    当 metadata 指向的片段覆盖整个源视频且 FPS 一致时直接复制；
+    否则按 from_timestamp/to_timestamp 裁剪，避免体积分块视频被整段复制到每个 episode。
+
     使用重编码而非 stream copy，因此能正确处理源视频 FPS 与目标不一致、
     或源文件包含多个 episode 拼接的情况。
     """
@@ -986,10 +1084,25 @@ def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: floa
     if duration <= 0:
         return False
 
+    # 检查是否可以直接复制
+    source_fps = get_video_fps(src)
+    video_duration = get_video_duration(src)
+
+    # 情况1：视频段是完整的（from_ts≈0 且 to_ts≈视频总长）
+    is_full_segment = from_ts < 0.01 and abs(to_ts - video_duration) < 0.01
+
+    fps_matches = abs(source_fps - target_fps) < 1e-6 or source_fps <= 0
+
+    if is_full_segment and fps_matches:
+        # 只有 metadata 覆盖整个源视频时才能复制。按路径猜测 per-episode
+        # 会误伤体积分块视频（chunk-000/file-000.mp4 里含多个 episode）。
+        shutil.copy2(src, dst)
+        return True
+
     cmd = [
+        "-i", str(src),
         "-ss", str(from_ts),
         "-t", str(duration),
-        "-i", str(src),
         "-vf", f"fps={target_fps},setpts=N/FRAME_RATE/TB",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
@@ -1008,7 +1121,8 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
                            skip_video_stats: bool = False):
     """合并多个 LeRobot 数据集，输出为规范 v3.0 per-episode 格式。
 
-    不依赖 LeRobotDataset/aggregate_datasets，因此能处理：
+    官方 aggregate_datasets 适合合并并按大小分片，但不提供一集一个视频的输出布局；
+    这里按 episodes metadata 自实现转换，因此能处理：
       - 数据文件命名不规范（episode_xxx.parquet）
       - video.fps 元数据不一致
       - 多 episode 共享一个 data/video 文件（会根据 metadata 的 timestamp 裁剪视频）
@@ -1017,6 +1131,7 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
     """
     input_paths = [Path(p).expanduser().resolve() for p in input_paths]
     output_path = Path(output_path).expanduser().resolve()
+    validate_merge_paths(input_paths, output_path)
 
     if output_path.exists():
         shutil.rmtree(output_path)
@@ -1041,6 +1156,8 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
         else:
             sources.append(p)
 
+    validate_merge_compatibility(sources, target_fps)
+
     # 用第一个源的特征定义作为基准
     base_info = load_info(sources[0])
     base_fps = float(base_info.get("fps", 15.0))
@@ -1059,7 +1176,7 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
     save_tasks(output_path, merged_tasks)
 
     # 准备 info
-    new_info = dict(base_info)
+    new_info = copy.deepcopy(base_info)
     new_info["codebase_version"] = "v3.0"
     new_info["fps"] = base_fps
     new_info["data_path"] = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
@@ -1091,11 +1208,7 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
         print(f"\nMerging from {src_root.name}: {len(ep_rows)} episodes")
 
         # task 映射：源 task_index -> 合并后 task_index
-        task_map = {}
-        for src_tidx in tasks_src["task_index"]:
-            task_str = tasks_src.index[src_tidx]
-            dst_tidx = merged_tasks[merged_tasks.index == task_str]["task_index"].values[0]
-            task_map[src_tidx] = dst_tidx
+        task_map, src_task_index_to_name = build_task_index_maps(tasks_src, merged_tasks)
 
         for ep_meta in tqdm(ep_rows, desc=f"Copy episodes from {src_root.name}"):
             old_ep_idx = int(ep_meta["episode_index"])
@@ -1116,10 +1229,21 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
 
             # 若 fps 不同，按时间对齐降采样（这里假设已经预处理过，仅做保险）
             if abs(fps_ratio - 1.0) > 1e-6:
+                if fps_ratio < 1.0:
+                    raise ValueError(
+                        f"Source FPS {src_fps} is lower than target/base FPS {base_fps}; "
+                        "upsampling is not supported by merge."
+                    )
+                step = int(round(fps_ratio))
+                if step <= 0 or abs(step - fps_ratio) > 1e-6:
+                    raise ValueError(
+                        f"FPS ratio must be an integer for frame decimation, got source={src_fps}, target={base_fps}."
+                    )
                 # 按目标 fps 选取最近帧
-                df = df.iloc[::int(round(fps_ratio))].reset_index(drop=True)
+                df = df.iloc[::step].reset_index(drop=True)
 
             length = len(df)
+            old_task_indices = df["task_index"].copy() if "task_index" in df.columns else None
             df["episode_index"] = new_ep_idx
             df["frame_index"] = np.arange(length, dtype=np.int64)
             df["timestamp"] = (np.arange(length, dtype=np.float64) / base_fps).astype(np.float32)
@@ -1149,7 +1273,11 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
                 else:
                     row["tasks"] = [str(ep_meta["tasks"])]
             elif len(tasks_src) > 0 and "task_index" in df.columns:
-                row["tasks"] = [str(tasks_src.index[int(t)]) for t in df["task_index"].unique()]
+                row["tasks"] = [
+                    src_task_index_to_name[int(t)]
+                    for t in old_task_indices.unique()
+                    if int(t) in src_task_index_to_name
+                ]
 
             # 并行处理多个摄像头的视频提取
             def process_camera(cam):
@@ -1164,19 +1292,28 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
                 dst_video = dst_dir / "file-000.mp4"
 
                 if src_video is not None:
-                    extract_video_segment_copy(src_video, dst_video, from_ts, to_ts, base_fps)
+                    ok = extract_video_segment_copy(src_video, dst_video, from_ts, to_ts, base_fps)
+                    if not ok:
+                        raise RuntimeError(
+                            f"Failed to extract video for episode {old_ep_idx}, camera {cam}: "
+                            f"{src_video} [{from_ts}, {to_ts}]"
+                        )
                 else:
-                    print(f"  WARNING: video not found for episode {old_ep_idx}, camera {cam}")
+                    raise FileNotFoundError(
+                        f"Video not found for episode {old_ep_idx}, camera {cam} "
+                        f"(chunk={chunk_idx}, file={file_idx})"
+                    )
 
                 return cam, new_ep_idx
 
-            with ThreadPoolExecutor(max_workers=len(camera_keys)) as executor:
-                results = executor.map(process_camera, camera_keys)
-                for cam, ep_idx in results:
-                    row[f"videos/{cam}/chunk_index"] = ep_idx
-                    row[f"videos/{cam}/file_index"] = 0
-                    row[f"videos/{cam}/from_timestamp"] = 0.0
-                    row[f"videos/{cam}/to_timestamp"] = length / base_fps
+            if camera_keys:
+                with ThreadPoolExecutor(max_workers=len(camera_keys)) as executor:
+                    results = executor.map(process_camera, camera_keys)
+                    for cam, ep_idx in results:
+                        row[f"videos/{cam}/chunk_index"] = ep_idx
+                        row[f"videos/{cam}/file_index"] = 0
+                        row[f"videos/{cam}/from_timestamp"] = 0.0
+                        row[f"videos/{cam}/to_timestamp"] = length / base_fps
 
             episode_rows.append(row)
             global_frame_idx += length
@@ -1261,13 +1398,16 @@ Examples:
                          help="要删除的 episode 索引")
     clean_p.add_argument("--remove-frozen", action="store_true",
                          help="删除 frozen 帧")
-    clean_p.add_argument("--frozen-threshold", type=float, default=0.001)
-    clean_p.add_argument("--frozen-min-frames", type=int, default=3)
+    clean_p.add_argument("--frozen-threshold", type=float, default=0.01)
+    clean_p.add_argument("--frozen-min-frames", type=int, default=30)
+    clean_p.add_argument("--frozen-vel-scale", type=float, default=10.0,
+                         help="frozen 检测时给轮子速度维度 (x.vel/y.vel/theta.vel) 的加权系数，"
+                              "大于 1 会让轮子运动更容易被检测到 (默认 10.0)")
     clean_p.add_argument("--downsample-fps", type=float, default=None)
     clean_p.add_argument("--keep-video-features-if-missing", action="store_true",
                          help="即使视频文件缺失也保留 video feature（会导致 LeRobotDataset 加载失败，仅在后续补视频时使用）")
-    clean_p.add_argument("--min-episode-length", type=int, default=0,
-                         help="清洗后长度小于该值的 episode 会被丢弃（默认 0，不丢弃）")
+    clean_p.add_argument("--min-episode-length", type=int, default=45,
+                         help="清洗后长度小于该值的 episode 会被丢弃")
     clean_p.add_argument("--skip-video-stats", action="store_true",
                          help="跳过视频特征统计计算（大幅加速，约 10x）")
     clean_p.add_argument("--output", type=str, required=True)
@@ -1289,6 +1429,7 @@ Examples:
             remove_frozen=args.remove_frozen,
             frozen_threshold=args.frozen_threshold,
             frozen_min_frames=args.frozen_min_frames,
+            frozen_vel_scale=args.frozen_vel_scale,
             downsample_fps=args.downsample_fps,
             drop_video_features_if_missing=not args.keep_video_features_if_missing,
             min_episode_length=args.min_episode_length,

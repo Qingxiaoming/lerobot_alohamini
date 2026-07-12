@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-from email import parser
+import argparse
+import time
+
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.feature_utils import hw_to_dataset_features
@@ -16,9 +18,6 @@ from lerobot.common.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
-from datetime import datetime
-import argparse
-
 
 def parse_bool(value: str | bool) -> bool:
     if isinstance(value, bool):
@@ -32,14 +31,39 @@ def parse_bool(value: str | bool) -> bool:
     raise argparse.ArgumentTypeError("Expected true or false.")
 
 
+def wait_for_segment_start(events: dict, label: str) -> bool:
+    events["start_recording"] = False
+    events["stop_current_episode"] = False
+    events["exit_early"] = False
+    print(f"Press 1 to start {label}. Press ESC to stop recording.")
+
+    while not events["start_recording"]:
+        if events["stop_recording"]:
+            return False
+        time.sleep(0.05)
+
+    events["start_recording"] = False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record episodes with bi-arm teleoperation")
     parser.add_argument("--dataset", type=str, required=True,
                     help="Dataset repo_id, e.g. liyitenga/record_20250914225057")
     parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to record")
     parser.add_argument("--fps", type=int, default=30, help="Frames per second")
-    parser.add_argument("--episode_time", type=int, default=60, help="Duration of each episode (seconds)")
-    parser.add_argument("--reset_time", type=int, default=10, help="Reset duration between episodes (seconds)")
+    parser.add_argument(
+        "--episode_time",
+        type=int,
+        default=None,
+        help="Duration of each episode in seconds. If omitted, press 1 to start and 2 to end.",
+    )
+    parser.add_argument(
+        "--reset_time",
+        type=int,
+        default=None,
+        help="Reset duration between episodes in seconds. If omitted, press 1 to start and 2 to end.",
+    )
     parser.add_argument("--task_description", type=str, default="My task description4", help="Task description")
     parser.add_argument("--remote_ip", type=str, default="127.0.0.1", help="Robot host IP")
     parser.add_argument("--robot_id", type=str, default="lekiwi_host", help="Robot ID")
@@ -69,6 +93,9 @@ def main():
     )
 
     args = parser.parse_args()
+    timed_mode = args.episode_time is not None or args.reset_time is not None
+    if timed_mode and (args.episode_time is None or args.reset_time is None):
+        parser.error("--episode_time and --reset_time must be provided together for timed recording.")
 
     # === Robot and teleop config ===
     robot_config = LeKiwiClientConfig(
@@ -127,15 +154,26 @@ def main():
 
     listener, events = init_keyboard_listener()
     init_rerun(session_name="lekiwi_record")
+    if not timed_mode and listener is None:
+        raise RuntimeError(
+            "Manual recording mode requires keyboard listening. "
+            "Use --episode_time and --reset_time in headless mode."
+        )
 
     if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
         raise ValueError("Robot or teleop is not connected!")
 
     print("Starting record loop...")
+    if timed_mode:
+        print(f"Timed mode: episode_time={args.episode_time}s, reset_time={args.reset_time}s")
+    else:
+        print("Manual mode: press 1 to start each segment, press 2 to end it.")
     recorded_episodes = 0
 
     while recorded_episodes < args.num_episodes and not events["stop_recording"]:
         log_say(f"Recording episode {recorded_episodes + 1} of {args.num_episodes}")
+        if not timed_mode and not wait_for_segment_start(events, "recording"):
+            break
 
         # === Main record loop ===
         record_loop(
@@ -144,7 +182,7 @@ def main():
             fps=args.fps,
             dataset=dataset,
             teleop=[leader_arm, keyboard],
-            control_time_s=args.episode_time,
+            control_time_s=args.episode_time if timed_mode else None,
             single_task=args.task_description,
             display_data=True,
             teleop_action_processor=teleop_action_processor,
@@ -157,18 +195,23 @@ def main():
             (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
         ):
             log_say("Reset the environment")
-            record_loop(
-                robot=robot,
-                events=events,
-                fps=args.fps,
-                teleop=[leader_arm, keyboard],
-                control_time_s=args.reset_time,
-                single_task=args.task_description,
-                display_data=True,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-            )
+            reset_started = timed_mode or wait_for_segment_start(events, "reset")
+            if not reset_started:
+                dataset.clear_episode_buffer()
+                break
+            if reset_started:
+                record_loop(
+                    robot=robot,
+                    events=events,
+                    fps=args.fps,
+                    teleop=[leader_arm, keyboard],
+                    control_time_s=args.reset_time if timed_mode else None,
+                    single_task=args.task_description,
+                    display_data=True,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_action_processor=robot_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                )
 
         if events["rerecord_episode"]:
             log_say("Re-record episode")
@@ -185,7 +228,8 @@ def main():
     robot.disconnect()
     leader_arm.disconnect()
     keyboard.disconnect()
-    listener.stop()
+    if listener is not None:
+        listener.stop()
     dataset.finalize()
     print(f"Dataset saved locally at: {dataset.root.resolve()}")
     if args.push_to_hub:

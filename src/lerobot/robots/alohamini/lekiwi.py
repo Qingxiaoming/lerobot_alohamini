@@ -579,13 +579,12 @@ class LeKiwi(Robot):
 
         obs_dict = {**left_arm_state, **right_arm_state,**base_vel}
         self.lift.contribute_observation(obs_dict)
-        print(f"[DEBUG] get_observation keys: {sorted(obs_dict.keys())}")  # debug
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
         # currents protection
-        self.read_and_check_currents(limit_ma=2000, print_currents=True)
+        self.read_and_check_currents(limit_ma=2000, print_currents=False)
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
@@ -685,10 +684,10 @@ class LeKiwi(Robot):
         now = time.monotonic()
         if print_currents and (now - self._last_currents_log_t >= 1.0):
             left_arr = [int(float(raw) * scale) for raw in left_curr_raw.values()]
-            print(f"[Currents][left_bus] {left_arr}")
+            logger.debug("Left bus currents: %s", left_arr)
             if right_curr_raw:
                 right_arr = [int(float(raw) * scale) for raw in right_curr_raw.values()]
-                print(f"[Currents][right_bus] {right_arr}")
+                logger.debug("Right bus currents: %s", right_arr)
             self._last_currents_log_t = now
 
         tripped = None
@@ -697,7 +696,7 @@ class LeKiwi(Robot):
 
             if current_ma > limit_ma:
                 self._overcurrent_count[name] = self._overcurrent_count.get(name, 0) + 1
-                print(f"[Overcurrent] {name}: {current_ma:.1f} mA > {limit_ma:.1f} mA ")
+                logger.warning("%s current %.1f mA exceeds limit %.1f mA", name, current_ma, limit_ma)
             else:
                 # reset when it goes back to normal -> "consecutive" semantics
                 self._overcurrent_count[name] = 0
@@ -708,9 +707,12 @@ class LeKiwi(Robot):
 
         if tripped is not None:
             name, current_ma, n = tripped
-            print(
-                f"[Overcurrent] {name}: {current_ma:.1f} mA > {limit_ma:.1f} mA "
-                f"for {n} consecutive reads, disconnecting!"
+            logger.error(
+                "%s current %.1f mA exceeds limit %.1f mA for %s consecutive reads, disconnecting",
+                name,
+                current_ma,
+                limit_ma,
+                n,
             )
             try:
                 self.stop_motion()
@@ -719,7 +721,7 @@ class LeKiwi(Robot):
             try:
                 self.disconnect()
             except Exception as e:
-                print(f"[Overcurrent] disconnect error: {e}")
+                logger.error("Disconnect after overcurrent failed: %s", e)
             sys.exit(1)
 
 
