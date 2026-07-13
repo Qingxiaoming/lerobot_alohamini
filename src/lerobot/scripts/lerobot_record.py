@@ -86,9 +86,11 @@ lerobot-record \\
 ```
 """
 
+import json
 import logging
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from pprint import pformat
 
 from lerobot.cameras import CameraConfig  # noqa: F401
@@ -217,6 +219,63 @@ class RecordConfig:
 """
 
 
+def _macro_entry_to_action(entry: dict, base_action: dict[str, float]) -> dict[str, float]:
+    if "delta" in entry:
+        values = entry["delta"]
+        action = dict(base_action)
+        for key, value in values.items():
+            action[key if key.startswith("arm_") else f"arm_{key}"] = (
+                base_action.get(key if key.startswith("arm_") else f"arm_{key}", 0.0) + value
+            )
+        return action
+
+    values = entry.get("action", entry)
+    return {key if key.startswith("arm_") else f"arm_{key}": value for key, value in values.items()}
+
+
+def load_action_macro(path: str | Path | None) -> list[dict] | None:
+    if path is None:
+        return None
+
+    with open(path) as f:
+        payload = json.load(f)
+
+    entries = payload["frames"] if isinstance(payload, dict) and "frames" in payload else payload
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"Macro file {path} must contain a non-empty list or a dict with a 'frames' list.")
+
+    macro = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Macro entry must be a dict, got {type(entry).__name__}: {entry}")
+        repeat = int(entry.get("repeat", 1))
+        frame = {k: v for k, v in entry.items() if k not in {"repeat", "dt"}}
+        macro.extend([frame] * max(repeat, 1))
+
+    return macro
+
+
+def follower_to_leader_feedback(action: dict[str, float], side: str = "right") -> dict[str, float]:
+    prefix = f"arm_{side}_"
+    return {
+        key.removeprefix("arm_"): value
+        for key, value in action.items()
+        if key.startswith(prefix) and key.endswith(".pos")
+    }
+
+
+def _set_macro_leader_torque(teleop_arm: Teleoperator | None, side: str, enabled: bool) -> None:
+    if teleop_arm is None:
+        return
+
+    side_arm = getattr(teleop_arm, f"{side}_arm", None)
+    target = side_arm if side_arm is not None else teleop_arm
+    method_name = "enable_torque" if enabled else "disable_torque"
+    method = getattr(target, method_name, None)
+    if method is not None:
+        method()
+
+
 @safe_stop_image_writer
 def record_loop(
     robot: Robot,
@@ -237,6 +296,9 @@ def record_loop(
     single_task: str | None = None,
     display_data: bool = False,
     display_compressed_images: bool = False,
+    action_macro: list[dict] | None = None,
+    macro_trigger_key: str = "g",
+    macro_sync_leader_side: str = "right",
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -262,7 +324,12 @@ def record_loop(
             None,
         )
 
-        if not (teleop_arm and teleop_keyboard and len(teleop) == 2 and robot.name in ("lekiwi_client", "alohamini_client")):
+        if not (
+            teleop_arm
+            and teleop_keyboard
+            and len(teleop) == 2
+            and robot.name in ("lekiwi_client", "alohamini_client")
+        ):
             raise ValueError(
                 f"For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. "
                 f"Currently only supported for LeKiwi robot.\n"
@@ -271,18 +338,32 @@ def record_loop(
                 f"  len(teleop) = {len(teleop)}\n"
                 f"  teleop_arm = {bool(teleop_arm)}\n"
                 f"  teleop_keyboard = {bool(teleop_keyboard)}\n"
-                f"  teleop types = {[type(t).__name__ for t in teleop]}"            
-        )
+                f"  teleop types = {[type(t).__name__ for t in teleop]}"
+            )
 
     control_interval = 1 / fps
 
     no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
+    macro_active = False
+    macro_index = 0
+    macro_base_action: dict[str, float] = {}
+    macro_trigger_was_pressed = False
+
+    def finish_macro() -> None:
+        nonlocal macro_active, macro_index, macro_base_action
+        if macro_active:
+            _set_macro_leader_torque(teleop_arm, macro_sync_leader_side, enabled=False)
+        macro_active = False
+        macro_index = 0
+        macro_base_action = {}
+
     while control_time_s is None or timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
         if events["exit_early"] or events.get("stop_current_episode", False):
+            finish_macro()
             events["exit_early"] = False
             events["stop_current_episode"] = False
             break
@@ -309,11 +390,42 @@ def record_loop(
 
         elif isinstance(teleop, list):
             arm_action = teleop_arm.get_action()
-            arm_action = {f"arm_{k}": v for k, v in arm_action.items()} 
+            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
             keyboard_action = teleop_keyboard.get_action()
+            macro_trigger_pressed = macro_trigger_key in keyboard_action
+            should_start_macro = (
+                action_macro is not None
+                and macro_trigger_pressed
+                and not macro_trigger_was_pressed
+                and not macro_active
+            )
+            macro_trigger_was_pressed = macro_trigger_pressed
+
+            if should_start_macro:
+                macro_active = True
+                macro_index = 0
+                macro_base_action = dict(arm_action)
+                _set_macro_leader_torque(teleop_arm, macro_sync_leader_side, enabled=True)
+                logging.info("Starting action macro triggered by key '%s'", macro_trigger_key)
+
+            if macro_active:
+                if macro_index >= len(action_macro):
+                    finish_macro()
+                    logging.info("Action macro completed")
+                else:
+                    macro_frame = _macro_entry_to_action(action_macro[macro_index], macro_base_action)
+                    macro_index += 1
+                    arm_action = {**arm_action, **macro_frame}
+                    if hasattr(teleop_arm, "send_feedback"):
+                        feedback = follower_to_leader_feedback(arm_action, side=macro_sync_leader_side)
+                        if feedback:
+                            teleop_arm.send_feedback(feedback)
+
             base_action = robot._from_keyboard_to_base_action(keyboard_action)
-            lift_action = robot._from_keyboard_to_lift_action(keyboard_action)  #AlohaMini addition
-            act = {**arm_action, **base_action, **lift_action} if len(base_action) > 0 else arm_action #AlohaMini fix
+            lift_action = robot._from_keyboard_to_lift_action(keyboard_action)  # AlohaMini addition
+            act = (
+                {**arm_action, **base_action, **lift_action} if len(base_action) > 0 else arm_action
+            )  # AlohaMini fix
             act_processed_teleop = teleop_action_processor((act, obs))
             action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
@@ -355,6 +467,8 @@ def record_loop(
         precise_sleep(max(sleep_time_s, 0.0))
 
         timestamp = time.perf_counter() - start_episode_t
+
+    finish_macro()
 
 
 @parser.wrap()
