@@ -526,20 +526,28 @@ python examples/debug/motors.py move_motors_by_script \
 ```
 
 > The generic debug action-script command above only configures its hard-coded debug motors. For an
-> AlohaMini follower, use the calibrated command below instead.
+> AlohaMini follower, save and restore a calibrated natural pose instead.
 
-Move both AlohaMini follower arms smoothly to their calibrated center pose (Pi side):
+Manually place both follower arms in a comfortable natural pose, then save it (Pi side):
 
 ```bash
-python -m lerobot.robots.alohamini.move_to_center \
+python -m lerobot.robots.alohamini.natural_pose save \
+  --robot_model alohamini2pro \
+  --arm both
+```
+
+Return both arms smoothly to the saved natural pose:
+
+```bash
+python -m lerobot.robots.alohamini.natural_pose move \
   --robot_model alohamini2pro \
   --arm both \
   --duration 5
 ```
 
-The command uses the calibration saved by `lekiwi_host`, does not start cameras or home the lift,
-and asks for confirmation before enabling arm torque. Use the same `--robot_id` passed during
-calibration if it was not `AlohaMiniRobot`.
+These commands use the calibration saved by `lekiwi_host`, do not start cameras or home the lift,
+and ask for confirmation before saving or moving. Use the same `--robot_id` passed during calibration
+if it was not `AlohaMiniRobot`.
 
 Run camera debug script:
 
