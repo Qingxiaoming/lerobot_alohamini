@@ -71,7 +71,18 @@ class BiSOLeader(BimanualMixin, Teleoperator):
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
-        return {}
+        return {
+            **{f"left_{k}": v for k, v in self.left_arm.feedback_features.items()},
+            **{f"right_{k}": v for k, v in self.right_arm.feedback_features.items()},
+        }
+
+    def enable_torque(self) -> None:
+        self.left_arm.enable_torque()
+        self.right_arm.enable_torque()
+
+    def disable_torque(self) -> None:
+        self.left_arm.disable_torque()
+        self.right_arm.disable_torque()
 
     def setup_motors(self) -> None:
         self.left_arm.setup_motors()
@@ -91,6 +102,11 @@ class BiSOLeader(BimanualMixin, Teleoperator):
 
         return action_dict
 
+    @check_if_not_connected
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO: Implement force feedback
-        raise NotImplementedError
+        left_fb = {k.removeprefix("left_"): v for k, v in feedback.items() if k.startswith("left_")}
+        right_fb = {k.removeprefix("right_"): v for k, v in feedback.items() if k.startswith("right_")}
+        if left_fb:
+            self.left_arm.send_feedback(left_fb)
+        if right_fb:
+            self.right_arm.send_feedback(right_fb)

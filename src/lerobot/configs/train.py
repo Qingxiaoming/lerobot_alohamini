@@ -152,10 +152,26 @@ class TrainPipelineConfig(HubMixin):
             self.policy.pretrained_path = Path(policy_path)
         elif self.resume:
             config_path = parser.parse_arg("config_path")
+            
+            # If config_path is not provided but output_dir is, try to find the checkpoint automatically
             if not config_path:
-                raise ValueError(
-                    f"A config_path is expected when resuming a run. Please specify path to {TRAIN_CONFIG_NAME}"
+                if not self.output_dir:
+                    raise ValueError(
+                        f"Either --config_path or --output_dir must be specified when resuming a run. "
+                        f"Please specify path to {TRAIN_CONFIG_NAME} or the output directory of the previous run."
+                    )
+                # Try to find train_config.json in the standard checkpoint location
+                from lerobot.utils.constants import CHECKPOINTS_DIR, LAST_CHECKPOINT_LINK, PRETRAINED_MODEL_DIR
+                expected_config_path = (
+                    Path(self.output_dir) / CHECKPOINTS_DIR / LAST_CHECKPOINT_LINK / PRETRAINED_MODEL_DIR / TRAIN_CONFIG_NAME
                 )
+                if expected_config_path.exists():
+                    config_path = str(expected_config_path)
+                else:
+                    raise FileNotFoundError(
+                        f"Could not find {TRAIN_CONFIG_NAME} in the expected location: {expected_config_path}. "
+                        "Please specify --config_path explicitly."
+                    )
 
             if not Path(config_path).resolve().exists():
                 raise NotADirectoryError(

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 import torch
 from termcolor import colored
 from torch.optim import Optimizer
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from lerobot.common.train_utils import (
@@ -63,6 +64,27 @@ from lerobot.utils.utils import (
 )
 
 from .lerobot_eval import eval_policy_all
+
+
+def _add_tensorboard_scalars(
+    writer: SummaryWriter,
+    prefix: str,
+    values: dict[str, Any],
+    step: int,
+) -> None:
+    """Log scalar metrics to TensorBoard, expanding short scalar sequences."""
+    for key, value in values.items():
+        tag = f"{prefix}/{key}"
+        if isinstance(value, (int, float)) or (torch.is_tensor(value) and value.numel() == 1):
+            writer.add_scalar(tag, value, step)
+        elif isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                if isinstance(item, (int, float)) or (torch.is_tensor(item) and item.numel() == 1):
+                    writer.add_scalar(f"{tag}/{i}", item, step)
+                else:
+                    logging.debug("Skipping non-scalar TensorBoard metric %s/%s: %s", tag, i, type(item))
+        else:
+            logging.debug("Skipping non-scalar TensorBoard metric %s: %s", tag, type(value))
 
 
 def update_policy(
@@ -211,8 +233,16 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     init_logging(accelerator=accelerator)
 
+    # TensorBoard writer (only on main process)
+    tensorboard_writer = None
+    if accelerator.is_main_process:
+        tb_log_dir = cfg.output_dir / "runs"
+        tb_log_dir.mkdir(parents=True, exist_ok=True)
+        tensorboard_writer = SummaryWriter(log_dir=tb_log_dir)
+        logging.info(f"TensorBoard logs will be saved to {tb_log_dir}")
+
     # Determine if this is the main process (for logging and checkpointing)
-    # When using accelerate, only the main process should log to avoid duplicate outputs
+    # When using accelerate, only the main process should log to avoid duplicate output
     is_main_process = accelerator.is_main_process
 
     # Only log on main process
@@ -546,6 +576,15 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 if step_time > 0:
                     train_tracker.samples_per_s = effective_batch_size / step_time
                 logging.info(train_tracker)
+                if tensorboard_writer is not None:
+                    _add_tensorboard_scalars(tensorboard_writer, "train", train_tracker.to_dict(), step)
+                    if output_dict:
+                        _add_tensorboard_scalars(tensorboard_writer, "train", output_dict, step)
+                    if sample_weighter is not None:
+                        _add_tensorboard_scalars(
+                            tensorboard_writer, "sample_weighting", sample_weighter.get_stats(), step
+                        )
+                    tensorboard_writer.flush()
                 if wandb_logger:
                     wandb_log_dict = train_tracker.to_dict()
                     if output_dict:
@@ -630,6 +669,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     if is_main_process:
         progbar.close()
+        if tensorboard_writer is not None:
+            tensorboard_writer.close()
 
     if eval_env:
         close_envs(eval_env)

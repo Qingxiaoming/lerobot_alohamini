@@ -22,21 +22,21 @@ from ..config import RobotConfig
 
 def lekiwi_cameras_config() -> dict[str, CameraConfig]:
     return {
-        # "forward": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
+        "forward": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
         # "backward": OpenCVCameraConfig(
         #     index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
         # ),
-        # "chest": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_chest", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "wrist_left": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_wrist_left", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "wrist_right": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_wrist_right", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
+        "chest": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_chest", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "wrist_left": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_wrist_left", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "wrist_right": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_wrist_right", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
     }
 
 
@@ -100,7 +100,7 @@ class LeKiwiClientConfig(RobotConfig):
     # alohamini1   – so-arm-5dof (6 joints per arm, no wrist_yaw)
     # alohamini2   – am-follower-6dof (7 joints per arm, includes wrist_yaw)
     # alohamini2pro– am-follower-6dof-hd (7 joints per arm, includes wrist_yaw)
-    robot_model: str = "alohamini1"
+    robot_model: str = "alohamini2pro"
 
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {

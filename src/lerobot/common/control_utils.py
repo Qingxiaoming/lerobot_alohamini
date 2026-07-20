@@ -142,6 +142,8 @@ def init_keyboard_listener():
     events["exit_early"] = False
     events["rerecord_episode"] = False
     events["stop_recording"] = False
+    events["start_recording"] = False
+    events["stop_current_episode"] = False
 
     if is_headless():
         logging.warning(
@@ -165,6 +167,13 @@ def init_keyboard_listener():
             elif key == keyboard.Key.esc:
                 print("Escape key pressed. Stopping data recording...")
                 events["stop_recording"] = True
+                events["exit_early"] = True
+            elif hasattr(key, "char") and key.char == "1":
+                print("1 key pressed. Starting current recording segment...")
+                events["start_recording"] = True
+            elif hasattr(key, "char") and key.char == "2":
+                print("2 key pressed. Ending current recording segment...")
+                events["stop_current_episode"] = True
                 events["exit_early"] = True
         except Exception as e:
             print(f"Error handling key press: {e}")

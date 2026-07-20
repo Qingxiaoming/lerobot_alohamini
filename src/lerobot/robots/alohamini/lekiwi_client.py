@@ -15,12 +15,9 @@
 # TODO(aliberts, Steven, Pepijn): use gRPC calls instead of zmq?
 
 import base64
-import inspect
 import json
 import logging
 from functools import cached_property
-import os
-from typing import Any
 
 import cv2
 import numpy as np
@@ -33,7 +30,6 @@ from lerobot.utils.errors import DeviceNotConnectedError
 from ..robot import Robot
 from .config_lekiwi import LeKiwiClientConfig
 from .model_specs import arm_state_keys_for_robot_model
-from .lift_axis import LiftAxisConfig
 
 logging.basicConfig(
     #level=logging.INFO,  
@@ -214,11 +210,6 @@ class LeKiwiClient(Robot):
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
 
         obs_dict: RobotObservation = {**flat_state, OBS_STATE: state_vec}
-        #lineno = frame.f_lineno
-        #print(f"[{filename}:{lineno}] obs_dict:{obs_dict}")
-        #print(f"[{filename}:{frame.f_lineno}] obs_dict:{obs_dict}")
-        
-        #logging.warning("obs_dict: %s", obs_dict)
 
         # Decode images
         current_frames: dict[str, np.ndarray] = {}

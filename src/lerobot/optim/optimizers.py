@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import abc
+import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -27,7 +28,7 @@ from lerobot.utils.constants import (
     OPTIMIZER_PARAM_GROUPS,
     OPTIMIZER_STATE,
 )
-from lerobot.utils.io_utils import deserialize_json_into_object, write_json
+from lerobot.utils.io_utils import write_json
 from lerobot.utils.utils import flatten_dict, unflatten_dict
 
 # Type alias for parameters accepted by optimizer build() methods.
@@ -349,10 +350,64 @@ def _load_single_optimizer_state(optimizer: torch.optim.Optimizer, save_dir: Pat
         loaded_state_dict = {"state": {}}
 
     if "param_groups" in current_state_dict:
-        param_groups = deserialize_json_into_object(
+        param_groups = _load_optimizer_param_groups(
             save_dir / OPTIMIZER_PARAM_GROUPS, current_state_dict["param_groups"]
         )
         loaded_state_dict["param_groups"] = param_groups
 
     optimizer.load_state_dict(loaded_state_dict)
     return optimizer
+
+
+def _coerce_saved_value_to_current_type(current: Any, saved: Any) -> Any:
+    """Restore JSON values while preserving tuple/list container types expected by PyTorch."""
+    if isinstance(current, tuple):
+        if not isinstance(saved, list):
+            return saved
+        if len(current) != len(saved):
+            return saved
+        return tuple(
+            _coerce_saved_value_to_current_type(cur_item, saved_item)
+            for cur_item, saved_item in zip(current, saved, strict=True)
+        )
+    if isinstance(current, list):
+        if not isinstance(saved, list):
+            return saved
+        if len(current) != len(saved):
+            return saved
+        return [
+            _coerce_saved_value_to_current_type(cur_item, saved_item)
+            for cur_item, saved_item in zip(current, saved, strict=True)
+        ]
+    return saved
+
+
+def _load_optimizer_param_groups(fpath: Path, current_param_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Load optimizer param groups, tolerating extra keys saved by schedulers.
+
+    Some PyTorch schedulers add keys such as ``initial_lr`` to optimizer param
+    groups before checkpointing. A freshly built optimizer may not have those
+    keys yet, so strict key equality can break resume even though the optimizer
+    state is otherwise compatible.
+    """
+    with open(fpath, encoding="utf-8") as f:
+        saved_param_groups = json.load(f)
+
+    if len(current_param_groups) != len(saved_param_groups):
+        raise ValueError(
+            f"Optimizer param group count mismatch: expected {len(current_param_groups)}, "
+            f"got {len(saved_param_groups)}"
+        )
+
+    restored_param_groups = []
+    for current_group, saved_group in zip(current_param_groups, saved_param_groups, strict=True):
+        if not isinstance(saved_group, dict):
+            raise TypeError(f"Type mismatch: expected dict, got {type(saved_group)}")
+
+        restored_group = current_group.copy()
+        for key, current_value in current_group.items():
+            if key in saved_group:
+                restored_group[key] = _coerce_saved_value_to_current_type(current_value, saved_group[key])
+        restored_param_groups.append(restored_group)
+
+    return restored_param_groups
