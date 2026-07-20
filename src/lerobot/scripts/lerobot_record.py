@@ -349,6 +349,7 @@ def record_loop(
     macro_active = False
     macro_index = 0
     macro_base_action: dict[str, float] = {}
+    last_arm_action: dict[str, float] = {}
     macro_trigger_was_pressed = False
 
     def finish_macro() -> None:
@@ -389,10 +390,15 @@ def record_loop(
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
         elif isinstance(teleop, list):
-            arm_action = teleop_arm.get_action()
-            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
             keyboard_action = teleop_keyboard.get_action()
             macro_trigger_pressed = macro_trigger_key in keyboard_action
+            if macro_active:
+                arm_action = dict(last_arm_action)
+            else:
+                arm_action = teleop_arm.get_action()
+                arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
+                last_arm_action = dict(arm_action)
+
             should_start_macro = (
                 action_macro is not None
                 and macro_trigger_pressed
@@ -416,6 +422,7 @@ def record_loop(
                     macro_frame = _macro_entry_to_action(action_macro[macro_index], macro_base_action)
                     macro_index += 1
                     arm_action = {**arm_action, **macro_frame}
+                    last_arm_action = dict(arm_action)
                     if hasattr(teleop_arm, "send_feedback"):
                         feedback = follower_to_leader_feedback(arm_action, side=macro_sync_leader_side)
                         if feedback:

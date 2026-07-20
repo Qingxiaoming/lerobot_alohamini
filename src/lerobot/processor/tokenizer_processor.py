@@ -24,6 +24,7 @@ token IDs and attention masks, which are then added to the observation dictionar
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,72 @@ if TYPE_CHECKING or _transformers_available:
 else:
     AutoProcessor = None
     AutoTokenizer = None
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _hf_local_files_only(default: bool = False) -> bool:
+    return (
+        default
+        or _env_flag("LEROBOT_HF_LOCAL_FILES_ONLY")
+        or _env_flag("HF_HUB_OFFLINE")
+        or _env_flag("TRANSFORMERS_OFFLINE")
+    )
+
+
+def _use_simple_tokenizer() -> bool:
+    return _env_flag("LEROBOT_DISABLE_HUGGINGFACE") or _env_flag("LEROBOT_USE_SIMPLE_TOKENIZER")
+
+
+class SimpleByteTokenizer:
+    """Small local tokenizer fallback for training policies without Hugging Face access."""
+
+    pad_token_id = 0
+
+    def __call__(
+        self,
+        text: str | list[str],
+        max_length: int,
+        truncation: bool = True,
+        padding: str = "max_length",
+        padding_side: str = "right",
+        return_tensors: str | None = "pt",
+        **_: Any,
+    ) -> dict[str, torch.Tensor | list[list[int]]]:
+        texts = [text] if isinstance(text, str) else list(text)
+        batch_ids: list[list[int]] = []
+        batch_mask: list[list[int]] = []
+
+        for item in texts:
+            # Keep IDs within PaliGemma's vocab while avoiding the pad token.
+            token_ids = [byte + 3 for byte in item.encode("utf-8")]
+            if truncation:
+                token_ids = token_ids[:max_length]
+
+            attention_mask = [1] * len(token_ids)
+            if padding == "max_length" and len(token_ids) < max_length:
+                pad_len = max_length - len(token_ids)
+                pad_ids = [self.pad_token_id] * pad_len
+                pad_mask = [0] * pad_len
+                if padding_side == "left":
+                    token_ids = pad_ids + token_ids
+                    attention_mask = pad_mask + attention_mask
+                else:
+                    token_ids = token_ids + pad_ids
+                    attention_mask = attention_mask + pad_mask
+
+            batch_ids.append(token_ids)
+            batch_mask.append(attention_mask)
+
+        if return_tensors == "pt":
+            return {
+                "input_ids": torch.tensor(batch_ids, dtype=torch.long),
+                "attention_mask": torch.tensor(batch_mask, dtype=torch.long),
+            }
+
+        return {"input_ids": batch_ids, "attention_mask": batch_mask}
 
 
 @dataclass
@@ -81,6 +148,7 @@ class TokenizerProcessorStep(ObservationProcessorStep):
     padding_side: str = "right"
     padding: str = "max_length"
     truncation: bool = True
+    local_files_only: bool = False
 
     # Internal tokenizer instance (not part of the config)
     input_tokenizer: Any = field(default=None, init=False, repr=False)
@@ -96,19 +164,39 @@ class TokenizerProcessorStep(ObservationProcessorStep):
             ImportError: If the `transformers` library is not installed.
             ValueError: If neither `tokenizer` nor `tokenizer_name` is provided.
         """
+        if self.tokenizer is not None:
+            # Use provided tokenizer object directly
+            self.input_tokenizer = self.tokenizer
+            return
+
+        if _use_simple_tokenizer():
+            logging.warning("Using SimpleByteTokenizer because Hugging Face access is disabled.")
+            self.input_tokenizer = SimpleByteTokenizer()
+            return
+
         if not _transformers_available:
             raise ImportError(
                 "The 'transformers' library is not installed. "
                 "Please install it with `pip install 'lerobot[transformers-dep]'` to use TokenizerProcessorStep."
             )
 
-        if self.tokenizer is not None:
-            # Use provided tokenizer object directly
-            self.input_tokenizer = self.tokenizer
-        elif self.tokenizer_name is not None:
+        if self.tokenizer_name is not None:
             if AutoTokenizer is None:
                 raise ImportError("AutoTokenizer is not available")
-            self.input_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+            try:
+                self.input_tokenizer = AutoTokenizer.from_pretrained(
+                    self.tokenizer_name,
+                    local_files_only=_hf_local_files_only(self.local_files_only),
+                )
+            except Exception:
+                if self.tokenizer_name == "google/paligemma-3b-pt-224":
+                    logging.warning(
+                        "Falling back to SimpleByteTokenizer because %s could not be loaded.",
+                        self.tokenizer_name,
+                    )
+                    self.input_tokenizer = SimpleByteTokenizer()
+                else:
+                    raise
         else:
             raise ValueError(
                 "Either 'tokenizer' or 'tokenizer_name' must be provided. "
@@ -285,6 +373,7 @@ class TokenizerProcessorStep(ObservationProcessorStep):
             "padding_side": self.padding_side,
             "padding": self.padding,
             "truncation": self.truncation,
+            "local_files_only": self.local_files_only,
         }
 
         # Only save tokenizer_name if it was used to create the tokenizer
@@ -349,6 +438,7 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
     max_action_tokens: int = 256
     fast_skip_tokens: int = 128
     paligemma_tokenizer_name: str = "google/paligemma-3b-pt-224"
+    local_files_only: bool = False
     # Internal tokenizer instance (not part of the config)
     action_tokenizer: Any = field(default=None, init=False, repr=False)
     _paligemma_tokenizer: Any = field(default=None, init=False, repr=False)
@@ -377,7 +467,9 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
             if AutoProcessor is None:
                 raise ImportError("AutoProcessor is not available")
             self.action_tokenizer = AutoProcessor.from_pretrained(
-                self.action_tokenizer_name, trust_remote_code=self.trust_remote_code
+                self.action_tokenizer_name,
+                trust_remote_code=self.trust_remote_code,
+                local_files_only=_hf_local_files_only(self.local_files_only),
             )
         else:
             raise ValueError(
@@ -390,6 +482,7 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
             trust_remote_code=self.trust_remote_code,
             add_eos_token=True,
             add_bos_token=False,
+            local_files_only=_hf_local_files_only(self.local_files_only),
         )
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:

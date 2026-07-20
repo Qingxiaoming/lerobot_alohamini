@@ -66,6 +66,27 @@ from lerobot.utils.utils import (
 from .lerobot_eval import eval_policy_all
 
 
+def _add_tensorboard_scalars(
+    writer: SummaryWriter,
+    prefix: str,
+    values: dict[str, Any],
+    step: int,
+) -> None:
+    """Log scalar metrics to TensorBoard, expanding short scalar sequences."""
+    for key, value in values.items():
+        tag = f"{prefix}/{key}"
+        if isinstance(value, (int, float)) or (torch.is_tensor(value) and value.numel() == 1):
+            writer.add_scalar(tag, value, step)
+        elif isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                if isinstance(item, (int, float)) or (torch.is_tensor(item) and item.numel() == 1):
+                    writer.add_scalar(f"{tag}/{i}", item, step)
+                else:
+                    logging.debug("Skipping non-scalar TensorBoard metric %s/%s: %s", tag, i, type(item))
+        else:
+            logging.debug("Skipping non-scalar TensorBoard metric %s: %s", tag, type(value))
+
+
 def update_policy(
     train_metrics: MetricsTracker,
     policy: PreTrainedPolicy,
@@ -556,14 +577,13 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                     train_tracker.samples_per_s = effective_batch_size / step_time
                 logging.info(train_tracker)
                 if tensorboard_writer is not None:
-                    for key, value in train_tracker.to_dict().items():
-                        tensorboard_writer.add_scalar(f"train/{key}", value, step)
+                    _add_tensorboard_scalars(tensorboard_writer, "train", train_tracker.to_dict(), step)
                     if output_dict:
-                        for key, value in output_dict.items():
-                            tensorboard_writer.add_scalar(f"train/{key}", value, step)
+                        _add_tensorboard_scalars(tensorboard_writer, "train", output_dict, step)
                     if sample_weighter is not None:
-                        for key, value in sample_weighter.get_stats().items():
-                            tensorboard_writer.add_scalar(f"sample_weighting/{key}", value, step)
+                        _add_tensorboard_scalars(
+                            tensorboard_writer, "sample_weighting", sample_weighter.get_stats(), step
+                        )
                     tensorboard_writer.flush()
                 if wandb_logger:
                     wandb_log_dict = train_tracker.to_dict()

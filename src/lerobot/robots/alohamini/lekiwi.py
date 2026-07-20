@@ -219,7 +219,7 @@ class LeKiwi(Robot):
 
 
     @check_if_already_connected
-    def connect(self, calibrate: bool = True) -> None:
+    def connect(self, calibrate: bool = True, home_lift: bool = True) -> None:
         self.left_bus.connect()
         if self.right_bus:
             self.right_bus.connect()
@@ -235,8 +235,9 @@ class LeKiwi(Robot):
         self.configure()
         logger.info(f"{self} connected.")
 
-        self.lift.home()
-        print("Lift axis homed to 0mm.")
+        if home_lift:
+            self.lift.home()
+            print("Lift axis homed to 0mm.")
 
         
 

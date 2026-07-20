@@ -525,6 +525,22 @@ python examples/debug/motors.py move_motors_by_script \
   --port /dev/ttyACM0
 ```
 
+> The generic debug action-script command above only configures its hard-coded debug motors. For an
+> AlohaMini follower, use the calibrated command below instead.
+
+Move both AlohaMini follower arms smoothly to their calibrated center pose (Pi side):
+
+```bash
+python -m lerobot.robots.alohamini.move_to_center \
+  --robot_model alohamini2pro \
+  --arm both \
+  --duration 5
+```
+
+The command uses the calibration saved by `lekiwi_host`, does not start cameras or home the lift,
+and asks for confirmation before enabling arm torque. Use the same `--robot_id` passed during
+calibration if it was not `AlohaMiniRobot`.
+
 Run camera debug script:
 
 ```bash

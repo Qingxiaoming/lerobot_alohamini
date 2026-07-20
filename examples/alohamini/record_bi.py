@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import time
+from pathlib import Path
 
 from lerobot.common.control_utils import init_keyboard_listener
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -15,7 +17,7 @@ from lerobot.teleoperators.so_leader import SOLeaderConfig
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import init_rerun
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -45,10 +47,110 @@ def wait_for_segment_start(events: dict, label: str) -> bool:
     return True
 
 
+def right_arm_action(action: dict[str, float]) -> dict[str, float]:
+    return {key: value for key, value in action.items() if key.startswith("right_") and key.endswith(".pos")}
+
+
+def leader_action_to_robot_action(leader_action: dict[str, float], obs: dict | None) -> dict[str, float]:
+    action = {f"arm_{key}": value for key, value in leader_action.items() if key.endswith(".pos")}
+    lift_height = 0.0 if obs is None else float(obs.get("lift_axis.height_mm", 0.0))
+    action.update(
+        {
+            "x.vel": 0.0,
+            "y.vel": 0.0,
+            "theta.vel": 0.0,
+            "lift_axis.height_mm": lift_height,
+        }
+    )
+    return action
+
+
+def record_right_arm_macro(
+    args: argparse.Namespace,
+    leader_arm_config: BiSOLeaderConfig,
+    robot_config: LeKiwiClientConfig,
+) -> None:
+    listener, events = init_keyboard_listener()
+    if listener is None:
+        raise RuntimeError("Macro recording requires keyboard listening.")
+
+    leader_arm = BiSOLeader(leader_arm_config)
+    robot = None if args.no_record_macro_robot_follow else LeKiwiClient(robot_config)
+    frames: list[dict[str, dict[str, float]]] = []
+
+    try:
+        leader_arm.connect()
+        leader_arm.disable_torque()
+        if robot is not None:
+            robot.connect()
+            init_rerun(session_name="alohamini_macro_record")
+            print("Follower tracking is enabled while recording the macro.")
+        else:
+            print("Follower tracking is disabled; recording leader motion only.")
+
+        if not wait_for_segment_start(events, "right-arm macro recording"):
+            print("Macro recording aborted before start.")
+            return
+
+        base = right_arm_action(leader_arm.get_action())
+        if not base:
+            raise RuntimeError("No right-arm leader action keys were read.")
+
+        print("Recording macro. Move the right leader arm through the primitive, then press 2 to stop.")
+        control_interval = 1.0 / args.fps
+        while not events["stop_current_episode"]:
+            if events["stop_recording"]:
+                print("Macro recording aborted; not saving.")
+                return
+
+            start_t = time.perf_counter()
+            leader_action = leader_arm.get_action()
+            current = right_arm_action(leader_action)
+            if args.record_macro_mode == "delta":
+                values = {key: current[key] - base[key] for key in base}
+                frames.append({"delta": values})
+            else:
+                frames.append({"action": current})
+
+            if robot is not None:
+                obs = robot.get_observation()
+                robot_action = leader_action_to_robot_action(leader_action, obs)
+                robot.send_action(robot_action)
+                log_rerun_data(observation=obs, action=robot_action)
+
+            time.sleep(max(control_interval - (time.perf_counter() - start_t), 0.0))
+
+    finally:
+        if robot is not None and robot.is_connected:
+            robot.disconnect()
+        if leader_arm.is_connected:
+            leader_arm.disconnect()
+        if listener is not None:
+            listener.stop()
+
+    if not frames:
+        raise RuntimeError("No macro frames were recorded.")
+
+    payload = {
+        "metadata": {
+            "fps": args.fps,
+            "mode": args.record_macro_mode,
+            "side": "right",
+            "arm_profile": args.arm_profile,
+            "num_frames": len(frames),
+        },
+        "frames": frames,
+    }
+    output = Path(args.record_right_arm_macro)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2))
+    print(f"Saved {len(frames)} macro frames to {output}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record episodes with bi-arm teleoperation")
     parser.add_argument(
-        "--dataset", type=str, required=True, help="Dataset repo_id, e.g. liyitenga/record_20250914225057"
+        "--dataset", type=str, default=None, help="Dataset repo_id, e.g. liyitenga/record_20250914225057"
     )
     parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to record")
     parser.add_argument("--fps", type=int, default=30, help="Frames per second")
@@ -86,6 +188,23 @@ def main():
     )
     parser.add_argument("--resume", action="store_true", help="Resume recording on existing dataset")
     parser.add_argument(
+        "--record_right_arm_macro",
+        type=str,
+        default=None,
+        help="Record a right-arm macro JSON from the leader, then exit.",
+    )
+    parser.add_argument(
+        "--record_macro_mode",
+        choices=["delta", "action"],
+        default="delta",
+        help="Save macro positions relative to the pose when 1 is pressed, or absolute positions.",
+    )
+    parser.add_argument(
+        "--no_record_macro_robot_follow",
+        action="store_true",
+        help="Record a macro from the leader only, without connecting the follower robot.",
+    )
+    parser.add_argument(
         "--right_arm_macro",
         type=str,
         default=None,
@@ -110,14 +229,16 @@ def main():
     timed_mode = args.episode_time is not None or args.reset_time is not None
     if timed_mode and (args.episode_time is None or args.reset_time is None):
         parser.error("--episode_time and --reset_time must be provided together for timed recording.")
-    action_macro = load_action_macro(args.right_arm_macro)
+    if args.dataset is None and args.record_right_arm_macro is None:
+        parser.error("--dataset is required unless --record_right_arm_macro is used.")
 
-    # === Robot and teleop config ===
     robot_config = LeKiwiClientConfig(
         remote_ip=args.remote_ip,
         id=args.robot_id,
         robot_model=args.robot_model,
     )
+
+    # === Robot and teleop config ===
     leader_arm_config = BiSOLeaderConfig(
         left_arm_config=SOLeaderConfig(
             port="/dev/am_arm_leader_left",
@@ -129,6 +250,13 @@ def main():
         ),
         id=args.leader_id,
     )
+
+    if args.record_right_arm_macro is not None:
+        record_right_arm_macro(args, leader_arm_config, robot_config)
+        return
+
+    action_macro = load_action_macro(args.right_arm_macro)
+
     keyboard_config = KeyboardTeleopConfig()
 
     robot = LeKiwiClient(robot_config)
@@ -209,6 +337,16 @@ def main():
             macro_trigger_key=args.macro_trigger_key,
             macro_sync_leader_side="right",
         )
+
+        # The recording loop can exit before its first iteration when the user
+        # presses 2 or ESC immediately after starting. Do not attempt to save an
+        # empty episode; DatasetWriter deliberately rejects zero-frame episodes.
+        if not dataset.has_pending_frames():
+            log_say("No frames were recorded; skipping the empty episode")
+            dataset.clear_episode_buffer()
+            if events["stop_recording"]:
+                break
+            continue
 
         # === Reset environment ===
         if not events["stop_recording"] and (
