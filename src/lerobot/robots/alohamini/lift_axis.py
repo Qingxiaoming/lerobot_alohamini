@@ -25,7 +25,7 @@ class LiftAxisConfig:
     lead_mm_per_rev: float = 84      # Lead screw pitch (mm per revolution)
     output_gear_ratio: float = 1.0    # Servo angle → lead screw angle transmission ratio
     soft_min_mm: float = 0.0
-    soft_max_mm: float = 300        # Lift travel range
+    soft_max_mm: float = 100        # Lift travel range
     descent_floor_mm: float = 5.0   # Hard lower guard: refuse downward motion below this height
 
     # Homing (drive downward to hard stop → rebound slightly)
