@@ -172,7 +172,14 @@ def init_keyboard_listener():
                 print("1 key pressed. Starting current recording segment...")
                 events["start_recording"] = True
             elif hasattr(key, "char") and key.char == "2":
-                print("2 key pressed. Ending current recording segment...")
+                current_episode = events.get("current_episode")
+                total_episodes = events.get("total_episodes")
+                episode_label = (
+                    f" (episode {current_episode} of {total_episodes})"
+                    if current_episode is not None and total_episodes is not None
+                    else ""
+                )
+                print(f"2 key pressed. Ending current recording segment{episode_label}...")
                 events["stop_current_episode"] = True
                 events["exit_early"] = True
         except Exception as e:

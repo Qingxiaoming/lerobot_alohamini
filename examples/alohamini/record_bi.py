@@ -164,7 +164,7 @@ def main():
         "--reset_time",
         type=int,
         default=None,
-        help="Reset duration between episodes in seconds. If omitted, press 1 to start and 2 to end.",
+        help="Deprecated and ignored. Reset the scene manually before pressing 1 for the next episode.",
     )
     parser.add_argument(
         "--task_description", type=str, default="My task description4", help="Task description"
@@ -226,9 +226,9 @@ def main():
     )
 
     args = parser.parse_args()
-    timed_mode = args.episode_time is not None or args.reset_time is not None
-    if timed_mode and (args.episode_time is None or args.reset_time is None):
-        parser.error("--episode_time and --reset_time must be provided together for timed recording.")
+    timed_mode = args.episode_time is not None
+    if args.reset_time is not None:
+        print("Warning: --reset_time is deprecated and ignored; there is no separate reset stage.")
     if args.dataset is None and args.record_right_arm_macro is None:
         parser.error("--dataset is required unless --record_right_arm_macro is used.")
 
@@ -300,7 +300,7 @@ def main():
     if not timed_mode and listener is None:
         raise RuntimeError(
             "Manual recording mode requires keyboard listening. "
-            "Use --episode_time and --reset_time in headless mode."
+            "Use --episode_time in headless mode."
         )
 
     if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
@@ -308,14 +308,16 @@ def main():
 
     print("Starting record loop...")
     if timed_mode:
-        print(f"Timed mode: episode_time={args.episode_time}s, reset_time={args.reset_time}s")
+        print(f"Timed mode: episode_time={args.episode_time}s")
     else:
-        print("Manual mode: press 1 to start each segment, press 2 to end it.")
+        print("Manual mode: press 1 to start an episode and press 2 to save it.")
     if action_macro is not None:
         print(f"Right-arm macro enabled: press {args.macro_trigger_key} to replay {args.right_arm_macro}")
     recorded_episodes = 0
 
     while recorded_episodes < args.num_episodes and not events["stop_recording"]:
+        events["current_episode"] = recorded_episodes + 1
+        events["total_episodes"] = args.num_episodes
         log_say(f"Recording episode {recorded_episodes + 1} of {args.num_episodes}")
         if not timed_mode and not wait_for_segment_start(events, "recording"):
             break
@@ -338,6 +340,13 @@ def main():
             macro_sync_leader_side="right",
         )
 
+        if events["rerecord_episode"]:
+            log_say("Discard episode and wait to re-record")
+            events["rerecord_episode"] = False
+            events["exit_early"] = False
+            dataset.clear_episode_buffer()
+            continue
+
         # The recording loop can exit before its first iteration when the user
         # presses 2 or ESC immediately after starting. Do not attempt to save an
         # empty episode; DatasetWriter deliberately rejects zero-frame episodes.
@@ -346,39 +355,6 @@ def main():
             dataset.clear_episode_buffer()
             if events["stop_recording"]:
                 break
-            continue
-
-        # === Reset environment ===
-        if not events["stop_recording"] and (
-            (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
-        ):
-            log_say("Reset the environment")
-            reset_started = timed_mode or wait_for_segment_start(events, "reset")
-            if not reset_started:
-                dataset.clear_episode_buffer()
-                break
-            if reset_started:
-                record_loop(
-                    robot=robot,
-                    events=events,
-                    fps=args.fps,
-                    teleop=[leader_arm, keyboard],
-                    control_time_s=args.reset_time if timed_mode else None,
-                    single_task=args.task_description,
-                    display_data=True,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    action_macro=action_macro,
-                    macro_trigger_key=args.macro_trigger_key,
-                    macro_sync_leader_side="right",
-                )
-
-        if events["rerecord_episode"]:
-            log_say("Re-record episode")
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
-            dataset.clear_episode_buffer()
             continue
 
         dataset.save_episode()
