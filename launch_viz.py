@@ -38,21 +38,26 @@ def find_datasets(base_dir: Path) -> list[Path]:
 
 
 def get_num_episodes(dataset_path: Path) -> int:
-    """读取数据集的 episode 数量。"""
-    episodes_path = dataset_path / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    if episodes_path.exists():
-        df = pd.read_parquet(episodes_path)
-        return len(df)
-
-    info_path = dataset_path / "meta" / "info.json"
-    with open(info_path, "r") as f:
-        info = json.load(f)
-    return info.get("total_episodes", 0)
+    """读取所有元数据分片，返回数据集的 episode 数量。"""
+    return len(list_episodes(dataset_path))
 
 
 def list_episodes(dataset_path: Path) -> list[int]:
-    """返回所有 episode 索引列表。"""
-    return list(range(get_num_episodes(dataset_path)))
+    """返回所有实际存在的 episode 索引，支持多个 chunk/file 分片。"""
+    episodes_dir = dataset_path / "meta" / "episodes"
+    episode_indices: set[int] = set()
+
+    for episodes_path in sorted(episodes_dir.glob("chunk-*/file-*.parquet")):
+        df = pd.read_parquet(episodes_path, columns=["episode_index"])
+        episode_indices.update(int(index) for index in df["episode_index"].tolist())
+
+    if episode_indices:
+        return sorted(episode_indices)
+
+    info_path = dataset_path / "meta" / "info.json"
+    with open(info_path, encoding="utf-8") as f:
+        info = json.load(f)
+    return list(range(info.get("total_episodes", 0)))
 
 
 def launch_viz(dataset_path: Path, episode_index: int):
@@ -90,6 +95,24 @@ def input_number(prompt: str, max_val: int | None = None) -> int | None:
             print("请输入数字，或输入 q 退出")
 
 
+def input_episode_index(prompt: str, episode_indices: list[int]) -> int | None:
+    """读取 episode 编号，并确保该编号在数据集中真实存在。"""
+    valid_indices = set(episode_indices)
+    while True:
+        value = input(prompt).strip().lower()
+        if value in ("q", "quit", "exit"):
+            return None
+        try:
+            episode_index = int(value)
+        except ValueError:
+            print("请输入 episode 编号，或输入 q 退出")
+            continue
+        if episode_index not in valid_indices:
+            print("该 episode 不存在，请输入上面范围内的有效编号")
+            continue
+        return episode_index
+
+
 def main():
     dataset_dir = get_dataset_dir()
     print(f"扫描数据集目录: {dataset_dir}")
@@ -109,14 +132,18 @@ def main():
         return
 
     selected_dataset = datasets[ds_idx]
-    num_episodes = get_num_episodes(selected_dataset)
+    episode_indices = list_episodes(selected_dataset)
+    num_episodes = len(episode_indices)
     print(f"\n已选择: {selected_dataset.name}")
-    print(f"共有 {num_episodes} 个 episodes (0 ~ {num_episodes - 1})")
+    if not episode_indices:
+        print("该数据集还没有可查看的 episode")
+        return
+    print(f"共有 {num_episodes} 个 episodes ({episode_indices[0]} ~ {episode_indices[-1]})")
 
     while True:
-        ep_idx = input_number(
-            f"\n输入要查看的 episode 编号 (0-{num_episodes - 1}, q 退出): ",
-            num_episodes,
+        ep_idx = input_episode_index(
+            f"\n输入要查看的 episode 编号 ({episode_indices[0]}-{episode_indices[-1]}, q 退出): ",
+            episode_indices,
         )
         if ep_idx is None:
             break
