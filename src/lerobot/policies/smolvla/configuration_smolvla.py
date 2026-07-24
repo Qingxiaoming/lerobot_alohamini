@@ -86,6 +86,12 @@ class SmolVLAConfig(PreTrainedConfig):
     # 推理时是否缓存 VLM 前缀的注意力 Key/Value，通常应保持开启以减少重复计算。
     use_cache: bool = True
 
+    # 仅用于推理的固定 Flow Matching 初始噪声种子。None 保持官方默认行为：每次生成动作块
+    # 都采样新的高斯噪声；设为整数后，每次重规划都复用由该种子生成的同一份合法高斯噪声。
+    # 这不会固定动作（图像、状态和语言仍会改变），也不会影响 forward() 中的训练噪声。
+    # 固定噪声可用于降低同一观测附近的随机抖动，但也可能固定到较差的动作模式，建议真机 A/B。
+    inference_fixed_noise_seed: int | None = None
+
     # ===== 微调范围 =====
     # 冻结视觉编码器可显著减少显存和训练量，适合单张 24 GB GPU 的首轮微调。
     freeze_vision_encoder: bool = True

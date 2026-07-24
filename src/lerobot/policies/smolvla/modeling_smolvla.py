@@ -290,6 +290,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
         lang_tokens = batch[f"{OBS_LANGUAGE_TOKENS}"]
         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
 
+        if noise is None:
+            noise = self._make_fixed_inference_noise(state)
+
         actions = self.model.sample_actions(
             images, img_masks, lang_tokens, lang_masks, state, noise=noise, **kwargs
         )
@@ -302,6 +305,17 @@ class SmolVLAPolicy(PreTrainedPolicy):
             actions = self._pi_aloha_encode_actions(actions)
 
         return actions
+
+    def _make_fixed_inference_noise(self, state: Tensor) -> Tensor | None:
+        """Create the same valid Gaussian latent for every inference action chunk."""
+        seed = self.config.inference_fixed_noise_seed
+        if seed is None:
+            return None
+
+        generator = torch.Generator(device=state.device)
+        generator.manual_seed(seed)
+        shape = (state.shape[0], self.config.chunk_size, self.config.max_action_dim)
+        return torch.randn(shape, dtype=torch.float32, device=state.device, generator=generator)
 
     def _prepare_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         if self.config.adapt_to_pi_aloha:
