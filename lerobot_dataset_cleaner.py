@@ -115,6 +115,50 @@ def get_video_duration(video_path: Path) -> float:
         return 0.0
 
 
+def get_video_timing_info(video_path: Path) -> Optional[Tuple[int, float, float]]:
+    """返回 ``(frame_count, start_time, duration)``，用于校验清洗后的视频。"""
+    if not video_path.exists():
+        return None
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-count_frames",
+        "-show_entries", "stream=nb_read_frames,start_time,duration",
+        "-of", "json",
+        str(video_path),
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+        stream = json.loads(out)["streams"][0]
+        return (
+            int(stream["nb_read_frames"]),
+            float(stream.get("start_time", 0.0)),
+            float(stream["duration"]),
+        )
+    except (KeyError, TypeError, ValueError, IndexError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return None
+
+
+def validate_episode_video(video_path: Path, expected_frames: int, fps: float):
+    """确保输出视频与 episode 数据长度一致，并从零时间戳开始。"""
+    timing = get_video_timing_info(video_path)
+    if timing is None:
+        raise RuntimeError(f"Unable to inspect generated video: {video_path}")
+
+    frame_count, start_time, duration = timing
+    expected_duration = expected_frames / fps
+    duration_tolerance = max(1e-3, 0.5 / fps)
+    errors = []
+    if frame_count != expected_frames:
+        errors.append(f"frames={frame_count}, expected={expected_frames}")
+    if abs(start_time) > 1e-4:
+        errors.append(f"start_time={start_time:.6f}, expected=0")
+    if abs(duration - expected_duration) > duration_tolerance:
+        errors.append(f"duration={duration:.6f}, expected={expected_duration:.6f}")
+    if errors:
+        raise RuntimeError(f"Invalid generated video {video_path}: " + "; ".join(errors))
+
+
 def get_video_info(video_path: Path) -> Optional[Tuple[int, int, int]]:
     """一次 ffprobe 调用返回 (frame_count, width, height)。失败返回 None。"""
     if not video_path.exists():
@@ -150,6 +194,7 @@ def copy_video_segment(input_path: Path, output_path: Path, start_frame: int, nu
         "-ss", str(start_time),
         "-t", str(duration),
         "-i", str(input_path),
+        "-vf", f"setpts=PTS-STARTPTS,fps={fps}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
@@ -157,6 +202,7 @@ def copy_video_segment(input_path: Path, output_path: Path, start_frame: int, nu
         str(output_path),
     ]
     run_ffmpeg(cmd)
+    validate_episode_video(output_path, num_frames, fps)
 
 
 def concat_video_segments(segment_paths: List[Path], output_path: Path, fps: float):
@@ -433,6 +479,7 @@ def extract_video_keep_ranges(
     keep_ranges: List[Tuple[int, int]],
     source_fps: float,
     target_fps: float,
+    expected_frames: Optional[int] = None,
 ):
     """用单个 ffmpeg filter 保留指定帧范围，重新编码为 H.264。
 
@@ -444,6 +491,8 @@ def extract_video_keep_ranges(
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
     total_frames = get_video_frame_count(input_path)
+    if expected_frames is None:
+        expected_frames = sum(num for _, num in keep_ranges)
 
     # 缩放到源视频帧号
     ratio = source_fps / target_fps if target_fps > 0 and source_fps > 0 else 1.0
@@ -459,6 +508,7 @@ def extract_video_keep_ranges(
 
     if keep_ranges == [(0, total_frames)]:
         shutil.copy2(input_path, output_path)
+        validate_episode_video(output_path, expected_frames, target_fps)
         return
 
     # 构建 select 表达式：between(n\,start\,end) 之和
@@ -482,6 +532,7 @@ def extract_video_keep_ranges(
         str(output_path),
     ]
     run_ffmpeg(cmd)
+    validate_episode_video(output_path, expected_frames, target_fps)
 
 
 def extract_or_copy_episode_video(
@@ -493,6 +544,7 @@ def extract_or_copy_episode_video(
     fps: float,
     keep_ranges: Optional[List[Tuple[int, int]]] = None,
     always_reencode: bool = False,
+    expected_frames: Optional[int] = None,
 ):
     """
     将输入数据集中某 episode 的视频提取/拷贝到输出数据集的新位置。
@@ -515,6 +567,8 @@ def extract_or_copy_episode_video(
 
     if keep_ranges is None:
         keep_ranges = [(0, get_video_frame_count(old_path))]
+    if expected_frames is None:
+        expected_frames = sum(num for _, num in keep_ranges)
 
     # 如果源视频 FPS 与目标不一致，必须重新编码/裁剪，不能直接复制
     if (
@@ -523,9 +577,17 @@ def extract_or_copy_episode_video(
         and keep_ranges == [(0, get_video_frame_count(old_path))]
     ):
         shutil.copy2(old_path, out_path)
+        validate_episode_video(out_path, expected_frames, fps)
         return True
 
-    extract_video_keep_ranges(old_path, out_path, keep_ranges, source_fps, fps)
+    extract_video_keep_ranges(
+        old_path,
+        out_path,
+        keep_ranges,
+        source_fps,
+        fps,
+        expected_frames=expected_frames,
+    )
     return True
 
 
@@ -860,7 +922,7 @@ def clean_dataset(
         # 处理视频（per-episode 模式）- 并行处理多个摄像头
         def process_camera(cam):
             if videos_present:
-                extract_or_copy_episode_video(
+                ok = extract_or_copy_episode_video(
                     input_path,
                     output_path,
                     cam,
@@ -869,11 +931,15 @@ def clean_dataset(
                     target_fps,
                     keep_ranges=keep,
                     always_reencode=remove_frozen,
+                    expected_frames=length,
                 )
+                if not ok:
+                    raise RuntimeError(f"Failed to generate video for episode {old_ep_idx}, camera {cam}")
 
         if camera_keys:
             with ThreadPoolExecutor(max_workers=len(camera_keys)) as executor:
-                executor.map(process_camera, camera_keys)
+                # 必须消费 map 结果，否则工作线程中的视频生成/校验异常不会传回主线程。
+                list(executor.map(process_camera, camera_keys))
 
         # episodes 元数据行
         row = {
@@ -1067,7 +1133,14 @@ def load_source_episodes(root: Path) -> Tuple[dict, pd.DataFrame, List[dict]]:
     return info, tasks, rows
 
 
-def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: float, target_fps: float):
+def extract_video_segment_copy(
+    src: Path,
+    dst: Path,
+    from_ts: float,
+    to_ts: float,
+    target_fps: float,
+    expected_frames: int,
+):
     """从源视频按时间戳裁剪一段，并统一输出为 target_fps 的 H.264。
 
     优化：
@@ -1097,13 +1170,16 @@ def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: floa
         # 只有 metadata 覆盖整个源视频时才能复制。按路径猜测 per-episode
         # 会误伤体积分块视频（chunk-000/file-000.mp4 里含多个 episode）。
         shutil.copy2(src, dst)
+        validate_episode_video(dst, expected_frames, target_fps)
         return True
 
     cmd = [
         "-i", str(src),
         "-ss", str(from_ts),
         "-t", str(duration),
-        "-vf", f"fps={target_fps},setpts=N/FRAME_RATE/TB",
+        # 先把裁剪片段的 PTS 归零，再按目标 FPS 采样。反过来会让 fps
+        # 滤镜在源文件的全局时间网格上取样，浮点边界处可能丢失首帧。
+        "-vf", f"setpts=PTS-STARTPTS,fps={target_fps}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-r", str(target_fps),
@@ -1112,7 +1188,8 @@ def extract_video_segment_copy(src: Path, dst: Path, from_ts: float, to_ts: floa
     ]
     try:
         run_ffmpeg(cmd)
-        return dst.exists() and dst.stat().st_size > 0
+        validate_episode_video(dst, expected_frames, target_fps)
+        return True
     except subprocess.CalledProcessError:
         return False
 
@@ -1292,7 +1369,14 @@ def merge_datasets_command(input_paths: List[Path], output_path: Path, target_fp
                 dst_video = dst_dir / "file-000.mp4"
 
                 if src_video is not None:
-                    ok = extract_video_segment_copy(src_video, dst_video, from_ts, to_ts, base_fps)
+                    ok = extract_video_segment_copy(
+                        src_video,
+                        dst_video,
+                        from_ts,
+                        to_ts,
+                        base_fps,
+                        expected_frames=length,
+                    )
                     if not ok:
                         raise RuntimeError(
                             f"Failed to extract video for episode {old_ep_idx}, camera {cam}: "
