@@ -14,12 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
 import argparse
+import base64
 import json
 import logging
 import time
-import sys
 
 import cv2
 import zmq
@@ -47,7 +46,7 @@ class LeKiwiHost:
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
- 
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run AlohaMini LeKiwi host process")
@@ -72,6 +71,16 @@ def main():
         action="store_true",
         help="Do not connect follower arms, only operate the base and lift. Use together with --no_leader on the teleoperate side.",
     )
+    parser.add_argument(
+        "--observation_only",
+        action="store_true",
+        help="Publish observations without accepting or applying commands to the physical robot.",
+    )
+    parser.add_argument(
+        "--no_home_lift",
+        action="store_true",
+        help="Skip lift-axis homing during startup.",
+    )
     args = parser.parse_args()
 
     logging.info("Configuring LeKiwi")
@@ -83,9 +92,8 @@ def main():
         logging.info("no_follower mode: follower arms will not connect, only base and lift operate.")
     robot = LeKiwi(robot_config)
 
-
     logging.info("Connecting AlohaMini")
-    robot.connect()
+    robot.connect(home_lift=not args.no_home_lift)
 
     logging.info("Starting HostAgent")
     host_config = LeKiwiHostConfig()
@@ -102,28 +110,29 @@ def main():
 
         while duration < host.connection_time_s:
             loop_start_time = time.time()
-            try:
-                msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
-                data = dict(json.loads(msg))
-                #print(f"Received action: {data}")   # debug 
-                _action_sent = robot.send_action(data)
-                
-                last_cmd_time = time.time()
-                watchdog_active = False
-            except zmq.Again:
-                pass
-            except Exception as e:
-                logging.exception("Message fetching failed: %s", e)
+            if not args.observation_only:
+                try:
+                    msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
+                    data = dict(json.loads(msg))
+                    # print(f"Received action: {data}")   # debug
+                    _action_sent = robot.send_action(data)
 
-            now = time.time()
-            if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
-                logging.warning(
-                    f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping robot motion."
-                )
-                watchdog_active = True
-                robot.stop_motion()
+                    last_cmd_time = time.time()
+                    watchdog_active = False
+                except zmq.Again:
+                    pass
+                except Exception as e:
+                    logging.exception("Message fetching failed: %s", e)
 
-            
+                now = time.time()
+                if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
+                    logging.warning(
+                        f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. "
+                        "Stopping robot motion."
+                    )
+                    watchdog_active = True
+                    robot.stop_motion()
+
             last_observation = robot.get_observation()
 
             # Encode ndarrays to base64 strings

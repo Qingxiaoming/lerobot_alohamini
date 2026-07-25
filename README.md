@@ -17,7 +17,8 @@ Start with setup, then follow the workflow for your hardware. Use the reference 
 1. [Install](docs/alohamini/install.md) — prepare the environment, serial port permissions, and Hugging Face login.
 2. Pick your robot workflow:
    - [AM-ARM200](docs/alohamini/am-arm200.md) — single-arm workflow on one PC: calibration, teleoperation, dataset recording, training, and evaluation.
-   - [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/alohamini.md) — dual-arm workflow with Pi + PC: calibration, teleoperation, dataset recording, training, and evaluation.
+   - [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/aloh
+[Currents][left_bus] [0, 0, 19, 13, 0, 0, 19, 0, 0, 0, 19]amini.md) — dual-arm workflow with Pi + PC: calibration, teleoperation, dataset recording, training, and evaluation.
 
 ### References
 

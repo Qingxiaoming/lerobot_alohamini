@@ -1,0 +1,62 @@
+{
+  "left_shoulder_pan": {
+    "sim_low": -2.185923,
+    "sim_high": 2.204330
+  },
+  "left_shoulder_lift": {
+    "sim_low": -3.164602,
+    "sim_high": 0.296059
+  },
+  "left_elbow_flex": {
+    "sim_low": -0.127321,
+    "sim_high": 3.052621
+  },
+  "left_wrist_flex": {
+    "sim_low": -1.590738,
+    "sim_high": 1.546253
+  },
+  "left_wrist_yaw_joint": {
+    "sim_low": -1.446544,
+    "sim_high": 1.503301
+  },
+  "left_wrist_roll": {
+    "sim_low": -3.141593,
+    "sim_high": 3.140059
+  },
+  "left_gripper": {
+    "policy_low": 0,
+    "policy_high": 100,
+    "sim_low": 0.174328,
+    "sim_high": -2.155243
+  },
+  "right_shoulder_pan": {
+    "sim_low": -2.052466,
+    "sim_high": 2.319379
+  },
+  "right_shoulder_lift": {
+    "sim_low": -3.310330,
+    "sim_high": 0.208622
+  },
+  "right_elbow_flex": {
+    "sim_low": -0.153398,
+    "sim_high": 3.002000
+  },
+  "right_wrist_flex": {
+    "sim_low": -1.397456,
+    "sim_high": 1.802427
+  },
+  "right_wrist_yaw_joint": {
+    "sim_low": -1.437340,
+    "sim_high": 1.468020
+  },
+  "right_wrist_roll": {
+    "sim_low": -3.141593,
+    "sim_high": 3.140059
+  },
+  "right_gripper": {
+    "policy_low": 0,
+    "policy_high": 100,
+    "sim_low": 0.129843,
+    "sim_high": -2.216602
+  }
+}
