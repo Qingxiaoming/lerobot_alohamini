@@ -108,7 +108,11 @@ def log_rerun_data(
                         rr.log(f"{key}_{i}", rr.Scalars(float(vi)))
                 else:
                     img_entity = rr.Image(arr).compress() if compress_images else rr.Image(arr)
-                    rr.log(key, entity=img_entity, static=True)
+                    # Camera frames are temporal observations. Logging them as
+                    # static makes the first frame shadow the live stream in
+                    # Rerun, which can leave the viewer stuck on the bridge's
+                    # initialization frame.
+                    rr.log(key, entity=img_entity)
 
     if action:
         for k, v in action.items():

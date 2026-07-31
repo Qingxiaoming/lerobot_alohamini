@@ -36,6 +36,10 @@ logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(message)s"
 )
 
+RECORDING_METADATA_KEY = "_recording"
+IMAGE_METADATA_KEY = "_images"
+
+
 class LeKiwiClient(Robot):
     config_class = LeKiwiClientConfig
     name = "alohamini_client"
@@ -65,6 +69,9 @@ class LeKiwiClient(Robot):
         self.last_frames = {}
 
         self.last_remote_state = {}
+        self.last_remote_action = {}
+        self.last_recording_metadata = {}
+        self.last_image_metadata = {}
         self._lift_target_mm = None
 
         # Define three speed levels and a current index
@@ -185,8 +192,17 @@ class LeKiwiClient(Robot):
             logging.error(f"Error decoding JSON observation: {e}")
             return None
 
-    def _decode_image_from_b64(self, image_b64: str) -> np.ndarray | None:
-        """Decodes a base64 encoded image string to an OpenCV image."""
+    def _decode_image_from_b64(
+        self, image_b64: str, *, color_space: str | None = None
+    ) -> np.ndarray | None:
+        """Decode a JPEG and expose the color order declared by the sender.
+
+        OpenCV always decodes JPEG into BGR. New simulator bridge packets
+        declare ``color_space=rgb`` because LeRobot datasets and policies
+        interpret three-channel arrays as RGB. Packets without image metadata
+        retain the legacy AlohaMini behavior for compatibility with deployed
+        physical hosts.
+        """
         if not image_b64:
             return None
         try:
@@ -195,6 +211,12 @@ class LeKiwiClient(Robot):
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if frame is None:
                 logging.warning("cv2.imdecode returned None for an image.")
+                return None
+            if color_space == "rgb":
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            elif color_space not in (None, "bgr"):
+                logging.error("Unsupported remote image color space: %s", color_space)
+                return None
             return frame
         except (TypeError, ValueError) as e:
             logging.error(f"Error decoding base64 image data: {e}")
@@ -204,6 +226,14 @@ class LeKiwiClient(Robot):
         self, observation: RobotObservation
     ) -> tuple[dict[str, np.ndarray], RobotObservation]:
         """Extracts frames, and state from the parsed observation."""
+
+        self._update_record_action_from_observation(observation)
+
+        image_metadata = observation.get(IMAGE_METADATA_KEY)
+        color_space = None
+        if isinstance(image_metadata, dict):
+            color_space = image_metadata.get("color_space")
+            self.last_image_metadata = dict(image_metadata)
 
         flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
 
@@ -216,11 +246,43 @@ class LeKiwiClient(Robot):
         for cam_name, image_b64 in observation.items():
             if cam_name not in self._cameras_ft:
                 continue
-            frame = self._decode_image_from_b64(image_b64)
+            frame = self._decode_image_from_b64(image_b64, color_space=color_space)
             if frame is not None:
+                expected_shape = self._cameras_ft[cam_name]
+                if frame.shape != expected_shape:
+                    logging.error(
+                        "Remote image %s has shape %s; expected %s",
+                        cam_name,
+                        frame.shape,
+                        expected_shape,
+                    )
+                    continue
                 current_frames[cam_name] = frame
 
         return current_frames, obs_dict
+
+    def _update_record_action_from_observation(self, observation: RobotObservation) -> bool:
+        metadata = observation.get(RECORDING_METADATA_KEY)
+        if not isinstance(metadata, dict):
+            return False
+        raw_action = metadata.get("action")
+        if not isinstance(raw_action, dict):
+            return False
+        missing = [name for name in self._state_order if name not in raw_action]
+        if missing:
+            logging.error("Simulator recording action is missing fields: %s", missing)
+            return False
+
+        values = np.array([raw_action[name] for name in self._state_order], dtype=np.float32)
+        self.last_remote_action = {
+            **{name: values[index] for index, name in enumerate(self._state_order)},
+            ACTION: values,
+        }
+        self.last_recording_metadata = {
+            "action_sequence": int(metadata.get("action_sequence", 0)),
+            "command_stamp_ns": int(metadata.get("command_stamp_ns", 0)),
+        }
+        return True
 
     def _get_data(self) -> tuple[dict[str, np.ndarray], RobotObservation]:
         """
@@ -278,6 +340,22 @@ class LeKiwiClient(Robot):
 
 
         return obs_dict
+
+    @check_if_not_connected
+    def get_record_action(self) -> tuple[RobotAction, dict[str, int]]:
+        """Read the latest simulator expert action without sending a command.
+
+        This action-only path deliberately skips image decoding. It is intended
+        for validating a simulator bridge before dataset recording is enabled.
+        """
+        latest_message_str = self._poll_and_get_latest_message()
+        if latest_message_str is not None:
+            observation = self._parse_observation_json(latest_message_str)
+            if observation is not None:
+                self._update_record_action_from_observation(observation)
+        if not self.last_remote_action:
+            raise RuntimeError("Simulator bridge has not published a complete recording action yet.")
+        return dict(self.last_remote_action), dict(self.last_recording_metadata)
 
     def _from_keyboard_to_base_action(self, pressed_keys: np.ndarray):
         # Speed control
