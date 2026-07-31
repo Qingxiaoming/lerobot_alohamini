@@ -1,1 +1,1 @@
-../../../../docs/source/policy_multi_task_dit_README.md
+../../../../docs/modules/policies/multi_task_dit.md

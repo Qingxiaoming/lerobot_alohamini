@@ -1,4 +1,6 @@
-#### View all motor states
+# Debug Tools
+
+## View all motor states
 ```
 python examples/debug/motors.py get_motors_states \
   --port /dev/ttyACM0
@@ -67,4 +69,3 @@ python examples/debug/motors.py move_motors_by_script \
    --script_path action_scripts/test_dance.txt  \
    --port /dev/ttyACM0
 ```
-

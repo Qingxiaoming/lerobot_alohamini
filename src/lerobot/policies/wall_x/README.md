@@ -1,1 +1,1 @@
-../../../../docs/source/policy_walloss_README.md
+../../../../docs/modules/policies/walloss.md

@@ -30,6 +30,7 @@ on:
       - main
     paths:
       - "docs/**"
+      - ".github/CONTRIBUTING.md"
 
   # Triggers the workflow on pull request events targeting main for the docs folder
   pull_request:
@@ -37,6 +38,7 @@ on:
       - main
     paths:
       - "docs/**"
+      - ".github/CONTRIBUTING.md"
 
   release:
     types: [published]
@@ -71,10 +73,11 @@ jobs:
       hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
 
   # This job builds a preview of the documentation for a pull request.
-  # The result of this job triggers the 'Upload PR Documentation' workflow.
+  # The result triggers the upload workflow in the upstream repository. Forks still run the build as
+  # documentation validation, but do not upload a Hugging Face preview without upstream secrets.
   build_pr_docs:
     name: Build PR Docs
-    if: github.event_name == 'pull_request' && github.repository == 'huggingface/lerobot'
+    if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: write

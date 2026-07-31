@@ -1,1 +1,1 @@
-../../../../docs/source/policy_rtc_README.md
+../../../../docs/modules/policies/rtc.md

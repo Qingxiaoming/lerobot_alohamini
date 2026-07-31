@@ -1,1 +1,1 @@
-../../../../docs/source/policy_tdmpc_README.md
+../../../../docs/modules/policies/tdmpc.md

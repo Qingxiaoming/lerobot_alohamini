@@ -1,1 +1,1 @@
-../../../../docs/source/policy_smolvla_README.md
+../../../../docs/modules/policies/smolvla.md

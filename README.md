@@ -10,23 +10,25 @@ Shared software layer for the AlohaMini product line, built on HuggingFace LeRob
 
 ## Documentation
 
-Start with setup, then follow the workflow for your hardware. Use the reference pages when you need exact flags, commands, or low-level debug tools.
+Start with setup, then follow the workflow for your hardware. The repository-wide
+[documentation index](DOCS.md) also links LeRobot references, module documentation, and internal
+runbooks.
 
 ### Recommended Path
 
-1. [Install](docs/alohamini/install.md) — prepare the environment, serial port permissions, and Hugging Face login.
+1. [Install](docs/source/alohamini/installation.mdx) — prepare the environment, serial port permissions, and Hugging Face login.
 2. Pick your robot workflow:
-   - [AM-ARM200](docs/alohamini/am-arm200.md) — single-arm workflow on one PC: calibration, teleoperation, dataset recording, training, and evaluation.
-   - [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/aloh
-[Currents][left_bus] [0, 0, 19, 13, 0, 0, 19, 0, 0, 0, 19]amini.md) — dual-arm workflow with Pi + PC: calibration, teleoperation, dataset recording, training, and evaluation.
+   - [AM-ARM200](docs/source/alohamini/am-arm200.mdx) — single-arm workflow on one PC: calibration, teleoperation, dataset recording, training, and evaluation.
+   - [AlohaMini 1 / 2 / 2 Pro](docs/source/alohamini/alohamini.mdx) — dual-arm workflow with Pi + PC: calibration, teleoperation, dataset recording, training, and evaluation.
 
 ### References
 
 | Reference | Use it for |
 |-----------|------------|
-| [Hardware Profiles](docs/alohamini/profiles.md) | `--arm_profile` and `--robot_model` flag meanings |
-| [Command Cheat Sheet](docs/alohamini/commands.md) | Copy-paste commands for setup, host, teleoperation, recording, training, evaluation, and common checks |
-| [Debug Tools](examples/debug/README.md) | Low-level motor, wheel, lift axis, servo ID, phase, midpoint, torque, and scripted-action debug functions |
+| [AlohaMini Documentation](docs/source/alohamini/index.mdx) | Public documentation home and workflow selection |
+| [Hardware Profiles](docs/source/alohamini/profiles.mdx) | `--arm_profile` and `--robot_model` flag meanings |
+| [Command Reference](docs/source/alohamini/commands.mdx) | Setup, host, teleoperation, recording, training, evaluation, and common checks |
+| [Debug Tools](docs/modules/examples/debug-tools.md) | Low-level motor, wheel, lift axis, servo ID, phase, midpoint, torque, and scripted-action debug functions |
 
 ---
 

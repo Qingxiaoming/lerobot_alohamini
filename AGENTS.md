@@ -1,6 +1,9 @@
 This file provides guidance to AI agents when working with code in this repository.
 
-> **User-facing help → [`AGENT_GUIDE.md`](./AGENT_GUIDE.md)** (SO-101 setup, recording, picking a policy, training duration, eval — with copy-pasteable commands).
+> **User-facing help → [`docs/internal/agents/user-support-guide.md`](./docs/internal/agents/user-support-guide.md)**
+> (SO-101 setup, recording, picking a policy, training duration, eval — with copy-pasteable commands).
+>
+> **Documentation index → [`DOCS.md`](./DOCS.md)**
 
 ## Project Overview
 
@@ -42,11 +45,46 @@ pre-commit run --all-files                           # Lint + format (ruff, typo
 
 - **`tests/`** — Pytest suite organized by module. Fixtures in `tests/fixtures/`, mocks in `tests/mocks/`. Hardware tests use skip decorators from `tests/utils.py`. E2E tests via `Makefile` write to `tests/outputs/`.
 - **`.github/workflows/`** — CI: `quality.yml` (pre-commit), `fast_tests.yml` (base deps, every PR), `full_tests.yml` (all extras + E2E + GPU, post-approval), `latest_deps_tests.yml` (daily lockfile upgrade), `security.yml` (TruffleHog), `release.yml` (PyPI publish on tags).
-- **`docs/source/`** — HF documentation (`.mdx` files). Per-policy READMEs, hardware guides, tutorials. Built separately via `docs-requirements.txt` and CI workflows.
+- **`docs/source/`** — Public HF documentation (`.mdx` files), including hardware guides and tutorials.
+  Built separately via `docs-requirements.txt` and CI workflows.
+- **`docs/modules/`** — Module-owned references, example guides, and short policy package READMEs.
+- **`docs/internal/`** — Agent guides, runbooks, handoffs, and dated change notes that are not
+  published on the documentation site.
+- **`docs/maintainers/`** — Documentation build and publishing instructions.
 - **`examples/`** — End-user tutorials and scripts organized by use case (dataset creation, training, hardware setup).
 - **`docker/`** — Dockerfiles for user (`Dockerfile.user`) and CI (`Dockerfile.internal`).
 - **`benchmarks/`** — Performance benchmarking scripts.
-- **Root files**: `pyproject.toml` (single source of truth for deps, build, tool config), `Makefile` (E2E test targets), `uv.lock`, `CONTRIBUTING.md` & `README.md` (general information).
+- **Root files**: `pyproject.toml` (single source of truth for deps, build, tool config), `Makefile` (E2E test targets), `uv.lock`, `README.md`, `DOCS.md`, and `AGENTS.md`.
+
+## Documentation Rules
+
+Treat documentation location and indexing as part of the change:
+
+- **Public documentation** belongs in `docs/source/`. Every user-facing page must be reachable from
+  `docs/source/_toctree.yml`; AlohaMini public guides belong in `docs/source/alohamini/`.
+- **Module-owned documentation** belongs in `docs/modules/`. A README may remain beside source code
+  only when module discovery or GitHub rendering requires it; prefer a symlink to the canonical file
+  in `docs/modules/`.
+- **Internal documentation** belongs in `docs/internal/`:
+  - reusable operational procedures go in `runbooks/`;
+  - point-in-time state and next-session context go in `handoffs/`;
+  - repair, enhancement, migration, and validation records go in `change-notes/`.
+- **Maintainer instructions** for building or publishing documentation belong in
+  `docs/maintainers/`.
+- Do not add fix logs, enhancement logs, session notes, generated reports, or module-specific manuals
+  to the repository root. Root-level Markdown documentation is limited to `README.md`, `DOCS.md`,
+  `AGENTS.md`, and compatibility links such as `CLAUDE.md`. GitHub community-health files belong in
+  `.github/`.
+- Name dated internal records `YYYY-MM-DD-<scope>-<slug>.md`. State the affected scope, observed
+  problem, change, verification evidence, and remaining limitations.
+- When adding, moving, or renaming a document, update all affected indexes, `_toctree.yml` entries,
+  relative links, and source README symlinks in the same change.
+- Preserve commands, paths, option names, topic names, configuration keys, and code blocks exactly
+  when reorganizing or translating documentation. Explicitly label host-, container-, simulator-, and
+  real-robot-only procedures.
+- Before handing off a documentation change, check internal links and symlink targets, run
+  `git diff --check`, and build `docs/source/` with the documented `doc-builder` command when the
+  documentation dependencies are available.
 
 ## Notes
 

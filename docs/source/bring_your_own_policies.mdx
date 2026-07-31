@@ -283,12 +283,15 @@ src/lerobot/policies/my_policy/
 ├── configuration_my_policy.py     # MyPolicyConfig + @register_subclass
 ├── modeling_my_policy.py          # MyPolicy(PreTrainedPolicy)
 ├── processor_my_policy.py         # make_my_policy_pre_post_processors
-└── README.md                      # symlink → ../../../../docs/source/policy_my_policy_README.md
+└── README.md                      # symlink → ../../../../docs/modules/policies/my_policy.md
 ```
 
 Two notes:
 
-- The `README.md` next to the source is a **symlink** into `docs/source/policy_<name>_README.md` — the actual file lives under `docs/`. Existing policies (act, smolvla, diffusion, …) all do this; copy one of those symlinks. The policy README is conventionally minimal: paper link + BibTeX citation.
+- The `README.md` next to the source is a **symlink** into
+  `docs/modules/policies/<name>.md` — the actual file lives under `docs/`. Existing policies (act,
+  smolvla, diffusion, …) all do this; copy one of those symlinks. The policy README is conventionally
+  minimal: paper link + BibTeX citation.
 - The user-facing tutorial — what to install, how to train, hyperparameters, benchmark numbers — lives separately at `docs/source/<my_policy>.mdx` and is registered in `_toctree.yml` under "Policies".
 
 The file names are load-bearing: the factory does lazy imports by name, and the processor is discovered by the `make_<policy_name>_pre_post_processors` convention.
@@ -363,14 +366,18 @@ If your policy is real-robot-only and no sim benchmark applies, swap the sim eva
 
 ### PR checklist
 
-The general expectations are in [`CONTRIBUTING.md`](https://github.com/huggingface/lerobot/blob/main/CONTRIBUTING.md) and the [PR template](https://github.com/huggingface/lerobot/blob/main/.github/PULL_REQUEST_TEMPLATE.md). On top of those, reviewers will look for:
+The general expectations are in the [contribution guide](./contributing) and the
+[PR template](https://github.com/huggingface/lerobot/blob/main/.github/PULL_REQUEST_TEMPLATE.md). On
+top of those, reviewers will look for:
 
 - [ ] `MyPolicy` and `MyPolicyConfig` cover the surface above; `__init_subclass__` accepts the class.
 - [ ] `factory.py` and `policies/__init__.py` are wired (lazy imports for modeling).
 - [ ] `make_my_policy_pre_post_processors` follows the naming convention.
 - [ ] Optional deps live behind a `[project.optional-dependencies]` extra and the `TYPE_CHECKING + require_package` guard.
 - [ ] `tests/policies/` updated; backward-compat artifact committed & policy-specific tests.
-- [ ] `src/lerobot/policies/<name>/README.md` symlinked into `docs/source/policy_<name>_README.md`; user-facing `docs/source/<name>.mdx` written and added to `_toctree.yml`.
+- [ ] `src/lerobot/policies/<name>/README.md` symlinked into
+      `docs/modules/policies/<name>.md`; user-facing `docs/source/<name>.mdx` written and added to
+      `_toctree.yml`.
 - [ ] At least one reproducible benchmark eval in the policy MDX with a published checkpoint (sim benchmark, or real-robot dataset + checkpoint).
 
 The fastest way to get a clean PR is to copy the directory of the existing policy closest to yours, rename, and replace contents method by method. Don't wait until everything is polished — open a draft PR early and iterate with us; reviewers would much rather give feedback on a half-finished branch than a fully-merged one.

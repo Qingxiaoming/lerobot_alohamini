@@ -1,1 +1,1 @@
-../../../../docs/source/policy_vqbet_README.md
+../../../../docs/modules/policies/vqbet.md

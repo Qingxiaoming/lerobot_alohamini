@@ -1,6 +1,9 @@
-# AGENT_GUIDE.md — LeRobot Helper for AI Agents & Users
+# Agent User-Support Guide
 
-This file is a practical, copy-paste-friendly companion for any AI agent (Cursor, Claude, ChatGPT, Codex, etc.) helping a user work with LeRobot. It complements [`AGENTS.md`](./AGENTS.md) (dev/contributor context) with **user-facing guidance**: how to start, what to train, how long, how to record, and how to calibrate an SO-101.
+This file is a practical, copy-paste-friendly companion for any AI agent (Cursor, Claude, ChatGPT,
+Codex, etc.) helping a user work with LeRobot. It complements
+[`AGENTS.md`](../../../AGENTS.md) (dev/contributor context) with **user-facing guidance**: how to
+start, what to train, how long, how to record, and how to calibrate an SO-101.
 
 ---
 
@@ -34,7 +37,7 @@ LeRobot = **datasets + policies + envs + robot control**, unified by a small set
 - **Envs** (sim) and **Robots** (real) — same action/observation contract so code swaps cleanly.
 - **CLI** — `lerobot-record`, `lerobot-train`, `lerobot-eval`, `lerobot-teleoperate`, `lerobot-calibrate`, `lerobot-find-port`, `lerobot-setup-motors`, `lerobot-replay`.
 
-See [`AGENTS.md`](./AGENTS.md) for repo architecture.
+See [`AGENTS.md`](../../../AGENTS.md) for repo architecture.
 
 ---
 
@@ -56,7 +59,9 @@ Read §2 above, then `AGENTS.md` "Architecture", then open `src/lerobot/policies
 
 ## 4. SO-101 end-to-end cheat-sheet
 
-Full details in [`docs/source/so101.mdx`](./docs/source/so101.mdx) and [`docs/source/il_robots.mdx`](./docs/source/il_robots.mdx). Minimum commands in order. Confirm arms are assembled + powered before issuing.
+Full details in [`so101.mdx`](../../source/so101.mdx) and
+[`il_robots.mdx`](../../source/il_robots.mdx). Minimum commands in order. Confirm arms are assembled
+and powered before issuing.
 
 **4.1 Install**
 
@@ -232,7 +237,8 @@ Match the policy to the user's **GPU memory** and **time budget**. Numbers below
 
 All policies typically train for **5–10 epochs** (see §7).
 
-> **Human-facing version:** the [Compute Hardware Guide](./docs/source/hardware_guide.mdx) reuses the table below and adds a cloud-GPU tier guide and a Hugging Face Jobs pointer.
+> **Human-facing version:** the [Compute Hardware Guide](../../source/hardware_guide.mdx) reuses the
+> table below and adds a cloud-GPU tier guide and a Hugging Face Jobs pointer.
 
 | Policy      | Batch | Update (ms) | Peak GPU mem (GB) | Best for                                                                                         |
 | ----------- | ----: | ----------: | ----------------: | ------------------------------------------------------------------------------------------------ |
@@ -255,7 +261,8 @@ All policies typically train for **5–10 epochs** (see §7).
 - **12–16 GB VRAM (4070/4080, A4000):** → `smolvla` with defaults, or `act`/`diffusion` with larger batch. `pi0`/`pi05`/`wall_x`/`xvla` feasible only with small batch + gradient accumulation.
 - **24+ GB VRAM (3090/4090/A5000):** → any policy. Prefer `smolvla` (unfrozen) for multi-task; `act` for single-task grasp-and-place (still often the best ROI). Could experiment with `pi0` or `pi05` or `xvla`
 - **80 GB (A100/H100):** → any, with healthy batch. `pi05`, `xvla`, `wall_x` become comfortable.
-- **CPU only:** → don't train here. Use Google Colab (see [`docs/source/notebooks.mdx`](./docs/source/notebooks.mdx)) or a rented GPU.
+- **CPU only:** → don't train here. Use Google Colab (see
+  [`notebooks.mdx`](../../source/notebooks.mdx)) or a rented GPU.
 
 ---
 
@@ -367,8 +374,11 @@ lerobot-eval \
 
 - Use `--policy.path=outputs/train/.../checkpoints/<step>/pretrained_model` for local checkpoints.
 - `--eval.n_episodes` should be ≥ 50 for a stable success-rate estimate.
-- Available envs live in `src/lerobot/envs/`. See [`docs/source/libero.mdx`](./docs/source/libero.mdx), [`metaworld.mdx`](./docs/source/metaworld.mdx), [`robocasa.mdx`](./docs/source/robocasa.mdx), [`vlabench.mdx`](./docs/source/vlabench.mdx) for specific benchmarks.
-- To add a new benchmark, see [`docs/source/adding_benchmarks.mdx`](./docs/source/adding_benchmarks.mdx) and [`envhub.mdx`](./docs/source/envhub.mdx).
+- Available envs live in `src/lerobot/envs/`. See [`libero.mdx`](../../source/libero.mdx),
+  [`metaworld.mdx`](../../source/metaworld.mdx), [`robocasa.mdx`](../../source/robocasa.mdx), and
+  [`vlabench.mdx`](../../source/vlabench.mdx) for specific benchmarks.
+- To add a new benchmark, see [`adding_benchmarks.mdx`](../../source/adding_benchmarks.mdx) and
+  [`envhub.mdx`](../../source/envhub.mdx).
 
 ### 8.2b Dockerfiles for benchmark eval
 
@@ -376,14 +386,14 @@ Benchmark envs have native dependencies that are painful to install locally. The
 
 | Benchmark   | Dockerfile                                                                             |
 | ----------- | -------------------------------------------------------------------------------------- |
-| LIBERO      | [`docker/Dockerfile.benchmark.libero`](./docker/Dockerfile.benchmark.libero)           |
-| LIBERO+     | [`docker/Dockerfile.benchmark.libero_plus`](./docker/Dockerfile.benchmark.libero_plus) |
-| MetaWorld   | [`docker/Dockerfile.benchmark.metaworld`](./docker/Dockerfile.benchmark.metaworld)     |
-| RoboCasa    | [`docker/Dockerfile.benchmark.robocasa`](./docker/Dockerfile.benchmark.robocasa)       |
-| RoboCerebra | [`docker/Dockerfile.benchmark.robocerebra`](./docker/Dockerfile.benchmark.robocerebra) |
-| RoboMME     | [`docker/Dockerfile.benchmark.robomme`](./docker/Dockerfile.benchmark.robomme)         |
-| RoboTwin    | [`docker/Dockerfile.benchmark.robotwin`](./docker/Dockerfile.benchmark.robotwin)       |
-| VLABench    | [`docker/Dockerfile.benchmark.vlabench`](./docker/Dockerfile.benchmark.vlabench)       |
+| LIBERO      | [`docker/Dockerfile.benchmark.libero`](../../../docker/Dockerfile.benchmark.libero)           |
+| LIBERO+     | [`docker/Dockerfile.benchmark.libero_plus`](../../../docker/Dockerfile.benchmark.libero_plus) |
+| MetaWorld   | [`docker/Dockerfile.benchmark.metaworld`](../../../docker/Dockerfile.benchmark.metaworld)     |
+| RoboCasa    | [`docker/Dockerfile.benchmark.robocasa`](../../../docker/Dockerfile.benchmark.robocasa)       |
+| RoboCerebra | [`docker/Dockerfile.benchmark.robocerebra`](../../../docker/Dockerfile.benchmark.robocerebra) |
+| RoboMME     | [`docker/Dockerfile.benchmark.robomme`](../../../docker/Dockerfile.benchmark.robomme)         |
+| RoboTwin    | [`docker/Dockerfile.benchmark.robotwin`](../../../docker/Dockerfile.benchmark.robotwin)       |
+| VLABench    | [`docker/Dockerfile.benchmark.vlabench`](../../../docker/Dockerfile.benchmark.vlabench)       |
 
 Build and run (adapt to your benchmark):
 
@@ -395,7 +405,7 @@ docker run --gpus all --rm -it \
   lerobot-eval --policy.path=<your_policy> --env.type=<env> --eval.n_episodes=50
 ```
 
-See [`docker/README.md`](./docker/README.md) for base-image details.
+See the [Docker module documentation](../../modules/docker.md) for base-image details.
 
 ### 8.3 Target success rates
 
@@ -405,8 +415,12 @@ Single-task grasp-and-place with 50 clean episodes: ACT should reach **> 70% suc
 
 ## 9. Further reading & resources
 
-- **Getting started:** [`installation.mdx`](./docs/source/installation.mdx) · [`il_robots.mdx`](./docs/source/il_robots.mdx) · [What makes a good dataset](https://huggingface.co/blog/lerobot-datasets)
-- **Per-policy docs:** browse [`docs/source/*.mdx`](./docs/source/) (policies, hardware, benchmarks, advanced training).
+- **Getting started:** [`installation.mdx`](../../source/installation.mdx) ·
+  [`il_robots.mdx`](../../source/il_robots.mdx) ·
+  [What makes a good dataset](https://huggingface.co/blog/lerobot-datasets)
+- **Per-policy docs:** browse [`docs/source/`](../../source/) (policies, hardware, benchmarks,
+  advanced training).
 - **Community:** [Discord](https://discord.com/invite/s3KuuzsPFb) · [Hub `LeRobot` tag](https://huggingface.co/datasets?other=LeRobot) · [Dataset visualizer](https://huggingface.co/spaces/lerobot/visualize_dataset)
 
-> Keep this file current. If you learn a rule that would prevent a class of user mistakes, add it here and in [`AGENTS.md`](./AGENTS.md).
+> Keep this file current. If you learn a rule that would prevent a class of user mistakes, add it
+> here and in [`AGENTS.md`](../../../AGENTS.md).

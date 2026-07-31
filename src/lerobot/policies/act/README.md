@@ -1,1 +1,1 @@
-../../../../docs/source/policy_act_README.md
+../../../../docs/modules/policies/act.md

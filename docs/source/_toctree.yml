@@ -7,6 +7,20 @@
     title: Cheat sheet
   title: Get started
 - sections:
+  - local: alohamini/index
+    title: Overview
+  - local: alohamini/installation
+    title: Installation
+  - local: alohamini/alohamini
+    title: AlohaMini 1 / 2 / 2 Pro
+  - local: alohamini/am-arm200
+    title: AM-ARM200
+  - local: alohamini/profiles
+    title: Hardware Profiles
+  - local: alohamini/commands
+    title: Command Reference
+  title: "AlohaMini"
+- sections:
   - local: il_robots
     title: Imitation Learning for Robots
   - local: lelab

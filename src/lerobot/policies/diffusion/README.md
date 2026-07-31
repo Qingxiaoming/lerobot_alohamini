@@ -1,1 +1,1 @@
-../../../../docs/source/policy_diffusion_README.md
+../../../../docs/modules/policies/diffusion.md

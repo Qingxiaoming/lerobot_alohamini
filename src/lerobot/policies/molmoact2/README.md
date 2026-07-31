@@ -1,1 +1,1 @@
-../../../../docs/source/policy_molmoact2_README.md
+../../../../docs/modules/policies/molmoact2.md

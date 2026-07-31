@@ -1,1 +1,1 @@
-../../../../docs/source/policy_pi05_README.md
+../../../../docs/modules/policies/pi05.md

@@ -1,1 +1,1 @@
-../../../../docs/source/policy_vla_jepa_README.md
+../../../../docs/modules/policies/vla_jepa.md
