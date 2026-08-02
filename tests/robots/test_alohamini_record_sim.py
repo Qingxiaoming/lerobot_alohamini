@@ -2,8 +2,10 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 SCRIPT = Path(__file__).parents[2] / "examples" / "alohamini" / "record_sim.py"
 SPEC = importlib.util.spec_from_file_location("record_sim", SCRIPT)
@@ -45,13 +47,281 @@ def test_workspace_mount_requires_exact_workspace_bind():
     assert record_sim.workspace_mount(inspect) == Path("/host/genie")
 
 
-def test_episode_success_requires_full_task_result_log(tmp_path):
-    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
-    (tmp_path / "episode.log").write_text("data: pending\n", encoding="utf-8")
+def test_capture_passes_attempt_identity_to_simulator(monkeypatch):
+    captured = {}
+
+    def fake_run(command, check):
+        captured["command"] = command
+        captured["check"] = check
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(record_sim.subprocess, "run", fake_run)
+
+    returncode = record_sim.capture_attempt(
+        "geniesim3",
+        "/workspace/.record_sim_raw/attempt-0007-deadbeef",
+        "run",
+    )
+
+    assert returncode == 0
+    assert captured["check"] is False
+    index = captured["command"].index("--attempt-id")
+    assert captured["command"][index + 1] == "attempt-0007-deadbeef"
+
+
+def test_episode_success_requires_correlated_structured_result(tmp_path):
     assert not record_sim.episode_succeeded(tmp_path, 0, "run")
     (tmp_path / "episode.log").write_text("data: success\n", encoding="utf-8")
+    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
+
+    result = {
+        "schema_version": 1,
+        "task_id": "c3_l1",
+        "attempt_id": tmp_path.name,
+        "reset_generation": 7,
+        "status": "failure",
+        "reason": "simulator task-state reported failure",
+        "terminal_stage": "retreat",
+        "started_at_s": 100.0,
+        "finished_at_s": 101.0,
+        "metrics": {"source": "/genie_sim/task_state/result"},
+    }
+    result_path = tmp_path / record_sim.EPISODE_RESULT_FILENAME
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
+
+    result["status"] = "pending"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
+
+    result["attempt_id"] = "another-attempt"
+    result["status"] = "success"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
+
+    result["attempt_id"] = tmp_path.name
+    result_path.write_text(json.dumps(result), encoding="utf-8")
     assert record_sim.episode_succeeded(tmp_path, 0, "run")
     assert not record_sim.episode_succeeded(tmp_path, 3, "run")
+
+
+def test_load_raw_metadata_returns_count_summary_or_none(tmp_path):
+    attempt_dir = tmp_path / "attempt"
+    assert record_sim.load_raw_metadata(attempt_dir) is None
+
+    raw_dir = attempt_dir / "raw"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "metadata.json").write_text("not json", encoding="utf-8")
+    assert record_sim.load_raw_metadata(attempt_dir) is None
+
+    (raw_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "cameras": ["forward"],
+                "frame_count": 0,
+                "action_count": 5,
+                "state_count": 42,
+                "dropped_incomplete_batches": 1,
+                "dropped_incomplete_batches_after_ready": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert record_sim.load_raw_metadata(attempt_dir) == {
+        "frame_count": 0,
+        "action_count": 5,
+        "state_count": 42,
+        "dropped_incomplete_batches": 1,
+        "dropped_incomplete_batches_after_ready": 0,
+    }
+
+
+def test_rejected_attempt_records_reset_generation_and_raw_metadata(monkeypatch, tmp_path):
+    attempts = []
+
+    class FakeRobot:
+        action_features = tuple(f"field_{index}" for index in range(18))
+        name = "alohamini"
+
+    class FakeDataset:
+        def __init__(self):
+            self.root = tmp_path / "dataset"
+            self.meta = SimpleNamespace(total_episodes=1)
+            self.finalized = False
+
+        def has_pending_frames(self):
+            return False
+
+        def finalize(self):
+            self.finalized = True
+
+    dataset = FakeDataset()
+
+    def fake_capture_attempt(_container, container_output, _episode_action):
+        attempt_dir = tmp_path / ".record_sim_raw" / Path(container_output).name
+        attempt_dir.mkdir(parents=True)
+        raw_dir = attempt_dir / "raw"
+        raw_dir.mkdir(exist_ok=True)
+        (raw_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "frame_count": 0,
+                    "action_count": 0,
+                    "state_count": 1593,
+                    "dropped_incomplete_batches": 0,
+                    "dropped_incomplete_batches_after_ready": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if not attempts:
+            result = {
+                "schema_version": 1,
+                "task_id": "c3_l1",
+                "attempt_id": attempt_dir.name,
+                "reset_generation": 2,
+                "status": "failure",
+                "reason": "simulator task-state reported failure",
+                "terminal_stage": "retreat",
+                "started_at_s": 100.0,
+                "finished_at_s": 101.0,
+                "metrics": {"source": "/genie_sim/task_state/result"},
+            }
+            (attempt_dir / record_sim.EPISODE_RESULT_FILENAME).write_text(
+                json.dumps(result), encoding="utf-8"
+            )
+        attempts.append(attempt_dir)
+        return 0
+
+    monkeypatch.setattr(record_sim, "docker_inspect", lambda _container: {})
+    monkeypatch.setattr(record_sim, "workspace_mount", lambda _inspect: tmp_path)
+    monkeypatch.setattr(record_sim, "LeKiwiClient", lambda _config: FakeRobot())
+    monkeypatch.setattr(record_sim, "capture_attempt", fake_capture_attempt)
+    monkeypatch.setattr(record_sim, "episode_succeeded", lambda *_args: False)
+    monkeypatch.setattr(record_sim, "RawEpisode", lambda attempt_dir: SimpleNamespace())
+    monkeypatch.setattr(record_sim, "create_dataset", lambda *_args: dataset)
+    monkeypatch.setattr(record_sim, "append_episode", lambda *_args: 12)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "record_sim.py",
+            "--dataset",
+            "test",
+            "--root",
+            str(tmp_path),
+            "--num_episodes",
+            "1",
+            "--max_attempts",
+            "3",
+            "--keep_failed",
+        ],
+    )
+
+    with pytest.raises(RuntimeError):
+        record_sim.main()
+
+    rows = [
+        json.loads(line)
+        for line in next((tmp_path / ".record_sim_raw").glob("session-*.jsonl"))
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(rows) == 3
+    for row in rows:
+        assert row["saved"] is False
+
+    first = rows[0]
+    assert first["reason"] == "task_result_failure"
+    assert first["reset_generation"] == 2
+    assert first["episode_result"]["status"] == "failure"
+    assert first["raw_metadata"] == {
+        "frame_count": 0,
+        "action_count": 0,
+        "state_count": 1593,
+        "dropped_incomplete_batches": 0,
+        "dropped_incomplete_batches_after_ready": 0,
+    }
+
+    for row in rows[1:]:
+        assert row["reason"] == "task_result_missing_or_invalid"
+        assert "reset_generation" not in row
+        assert row["raw_metadata"]["state_count"] == 1593
+
+
+def test_conversion_failure_deletes_attempt_and_continues(monkeypatch, tmp_path):
+    attempts = []
+
+    class FakeRobot:
+        action_features = tuple(f"field_{index}" for index in range(18))
+        name = "alohamini"
+
+    class FakeDataset:
+        def __init__(self):
+            self.root = tmp_path / "dataset"
+            self.meta = SimpleNamespace(total_episodes=1)
+            self.finalized = False
+
+        def has_pending_frames(self):
+            return False
+
+        def finalize(self):
+            self.finalized = True
+
+    dataset = FakeDataset()
+
+    def fake_capture_attempt(_container, container_output, _episode_action):
+        attempt_dir = tmp_path / ".record_sim_raw" / Path(container_output).name
+        attempt_dir.mkdir(parents=True)
+        attempts.append(attempt_dir)
+        return 0
+
+    def fake_raw_episode(attempt_dir):
+        if attempt_dir == attempts[0]:
+            raise ValueError("raw recorder dropped synchronized camera data during the episode")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(record_sim, "docker_inspect", lambda _container: {})
+    monkeypatch.setattr(record_sim, "workspace_mount", lambda _inspect: tmp_path)
+    monkeypatch.setattr(record_sim, "LeKiwiClient", lambda _config: FakeRobot())
+    monkeypatch.setattr(record_sim, "capture_attempt", fake_capture_attempt)
+    monkeypatch.setattr(record_sim, "episode_succeeded", lambda *_args: True)
+    monkeypatch.setattr(record_sim, "RawEpisode", fake_raw_episode)
+    monkeypatch.setattr(record_sim, "create_dataset", lambda *_args: dataset)
+    monkeypatch.setattr(record_sim, "append_episode", lambda *_args: 12)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "record_sim.py",
+            "--dataset",
+            "test",
+            "--root",
+            str(dataset.root),
+            "--num_episodes",
+            "1",
+            "--max_attempts",
+            "2",
+        ],
+    )
+
+    record_sim.main()
+
+    assert len(attempts) == 2
+    assert not attempts[0].exists()
+    assert not attempts[1].exists()
+    rows = [
+        json.loads(line)
+        for line in next((tmp_path / ".record_sim_raw").glob("session-*.jsonl"))
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert rows[0]["reason"] == "conversion_failed"
+    assert rows[0]["error_type"] == "ValueError"
+    assert "dropped synchronized camera data" in rows[0]["error"]
+    assert rows[1]["saved"] is True
+    assert dataset.finalized
 
 
 def test_raw_bundle_converts_into_real_lerobot_episode(tmp_path):

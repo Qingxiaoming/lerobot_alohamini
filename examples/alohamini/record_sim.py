@@ -23,6 +23,10 @@ from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.feature_utils import hw_to_dataset_features
 
 CAMERAS = ("forward", "chest", "wrist_left", "wrist_right")
+EPISODE_RESULT_FILENAME = "episode_result.json"
+EPISODE_RESULT_STATUSES = frozenset(
+    ("success", "failure", "timeout", "aborted", "error")
+)
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -222,8 +226,92 @@ def capture_attempt(container: str, container_output: str, episode_action: str) 
         container_output,
         "--action",
         episode_action,
+        "--attempt-id",
+        Path(container_output).name,
     ]
     return subprocess.run(command, check=False).returncode
+
+
+def load_episode_result(attempt_dir: Path) -> dict[str, Any] | None:
+    """Load a valid shared EpisodeResult correlated to this raw attempt."""
+    path = attempt_dir / EPISODE_RESULT_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    required = {
+        "schema_version",
+        "task_id",
+        "attempt_id",
+        "reset_generation",
+        "status",
+        "reason",
+        "terminal_stage",
+        "started_at_s",
+        "finished_at_s",
+        "metrics",
+    }
+    if not required.issubset(payload):
+        return None
+    schema_version = payload["schema_version"]
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != 1
+        or payload["task_id"] != "c3_l1"
+    ):
+        return None
+    if payload["attempt_id"] != attempt_dir.name:
+        return None
+    generation = payload["reset_generation"]
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+        return None
+    if payload["status"] not in EPISODE_RESULT_STATUSES:
+        return None
+    if not isinstance(payload["reason"], str):
+        return None
+    terminal_stage = payload["terminal_stage"]
+    if terminal_stage is not None and not isinstance(terminal_stage, str):
+        return None
+    started = payload["started_at_s"]
+    finished = payload["finished_at_s"]
+    if (
+        isinstance(started, bool)
+        or isinstance(finished, bool)
+        or not isinstance(started, (int, float))
+        or not isinstance(finished, (int, float))
+        or started < 0
+        or finished < started
+    ):
+        return None
+    if not isinstance(payload["metrics"], dict):
+        return None
+    return payload
+
+
+def load_raw_metadata(attempt_dir: Path) -> dict[str, Any] | None:
+    """Load the recorder's raw stream counts for a rejected attempt."""
+    path = attempt_dir / "raw" / "metadata.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    keys = (
+        "frame_count",
+        "action_count",
+        "state_count",
+        "dropped_incomplete_batches",
+        "dropped_incomplete_batches_after_ready",
+    )
+    return {key: payload[key] for key in keys if key in payload}
 
 
 def episode_succeeded(attempt_dir: Path, returncode: int, episode_action: str) -> bool:
@@ -231,11 +319,8 @@ def episode_succeeded(attempt_dir: Path, returncode: int, episode_action: str) -
         return False
     if episode_action != "run":
         return True
-    episode_log_path = attempt_dir / "episode.log"
-    if not episode_log_path.is_file():
-        return False
-    episode_log = episode_log_path.read_text(encoding="utf-8")
-    return "data: success" in episode_log
+    result = load_episode_result(attempt_dir)
+    return result is not None and result["status"] == "success"
 
 
 def create_dataset(args: argparse.Namespace, robot: LeKiwiClient) -> LeRobotDataset:
@@ -367,22 +452,32 @@ def main() -> None:
             container_output = f"/workspace/.record_sim_raw/{attempt_id}"
             print(f"Attempt {attempt}/{max_attempts}: {attempt_id}")
             returncode = capture_attempt(args.container, container_output, args.episode_action)
+            episode_result = (
+                load_episode_result(attempt_dir)
+                if args.episode_action == "run"
+                else None
+            )
             success = episode_succeeded(attempt_dir, returncode, args.episode_action)
             if not success:
-                failure_reason = (
-                    f"capture_returncode_{returncode}"
-                    if returncode != 0
-                    else "task_result_not_success"
-                )
-                append_jsonl(
-                    session_log,
-                    {
-                        "attempt": attempt,
-                        "attempt_id": attempt_id,
-                        "saved": False,
-                        "reason": failure_reason,
-                    },
-                )
+                if episode_result is not None:
+                    failure_reason = f"task_result_{episode_result['status']}"
+                elif returncode != 0:
+                    failure_reason = f"capture_returncode_{returncode}"
+                else:
+                    failure_reason = "task_result_missing_or_invalid"
+                failure_row = {
+                    "attempt": attempt,
+                    "attempt_id": attempt_id,
+                    "saved": False,
+                    "reason": failure_reason,
+                }
+                if episode_result is not None:
+                    failure_row["reset_generation"] = episode_result["reset_generation"]
+                    failure_row["episode_result"] = episode_result
+                raw_metadata = load_raw_metadata(attempt_dir)
+                if raw_metadata is not None:
+                    failure_row["raw_metadata"] = raw_metadata
+                append_jsonl(session_log, failure_row)
                 print(f"Attempt failed (returncode={returncode}); episode was not added")
                 if not args.keep_failed:
                     shutil.rmtree(attempt_dir, ignore_errors=True)
@@ -390,6 +485,26 @@ def main() -> None:
 
             try:
                 raw = RawEpisode(attempt_dir)
+            except ValueError as exc:
+                append_jsonl(
+                    session_log,
+                    {
+                        "attempt": attempt,
+                        "attempt_id": attempt_id,
+                        "saved": False,
+                        "reason": "conversion_failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+                print(f"Conversion failed ({type(exc).__name__}: {exc})")
+                if args.keep_failed:
+                    print(f"Failed raw bundle retained at {attempt_dir}")
+                else:
+                    shutil.rmtree(attempt_dir, ignore_errors=True)
+                    print(f"Failed raw bundle deleted: {attempt_dir}")
+                continue
+            try:
                 if dataset is None:
                     dataset = create_dataset(args, robot)
                 frame_count = append_episode(
@@ -402,28 +517,20 @@ def main() -> None:
             except Exception:
                 if dataset is not None and dataset.has_pending_frames():
                     dataset.clear_episode_buffer()
-                append_jsonl(
-                    session_log,
-                    {
-                        "attempt": attempt,
-                        "attempt_id": attempt_id,
-                        "saved": False,
-                        "reason": "conversion_failed",
-                    },
-                )
-                print(f"Conversion failed; raw bundle retained at {attempt_dir}")
+                print(f"Dataset conversion failed; raw bundle retained at {attempt_dir}")
                 raise
             successes += 1
-            append_jsonl(
-                session_log,
-                {
-                    "attempt": attempt,
-                    "attempt_id": attempt_id,
-                    "saved": True,
-                    "dataset_episode": dataset.meta.total_episodes - 1,
-                    "frames": frame_count,
-                },
-            )
+            success_row = {
+                "attempt": attempt,
+                "attempt_id": attempt_id,
+                "saved": True,
+                "dataset_episode": dataset.meta.total_episodes - 1,
+                "frames": frame_count,
+            }
+            if episode_result is not None:
+                success_row["reset_generation"] = episode_result["reset_generation"]
+                success_row["episode_result"] = episode_result
+            append_jsonl(session_log, success_row)
             print(
                 f"Saved successful episode {successes}/{args.num_episodes} "
                 f"({frame_count} frames)"
