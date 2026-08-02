@@ -61,12 +61,19 @@ def test_capture_passes_attempt_identity_to_simulator(monkeypatch):
         "geniesim3",
         "/workspace/.record_sim_raw/attempt-0007-deadbeef",
         "run",
+        "alohaminipro_fruits",
     )
 
     assert returncode == 0
     assert captured["check"] is False
     index = captured["command"].index("--attempt-id")
     assert captured["command"][index + 1] == "attempt-0007-deadbeef"
+    task_env_index = captured["command"].index("-e")
+    assert captured["command"][task_env_index + 1] == "GENIESIM_TASK=alohaminipro_fruits"
+    assert (
+        captured["command"][task_env_index + 3]
+        == "GENIESIM_TASK_ID=alohaminipro_fruits"
+    )
 
 
 def test_episode_success_requires_correlated_structured_result(tmp_path):
@@ -103,6 +110,33 @@ def test_episode_success_requires_correlated_structured_result(tmp_path):
     result_path.write_text(json.dumps(result), encoding="utf-8")
     assert record_sim.episode_succeeded(tmp_path, 0, "run")
     assert not record_sim.episode_succeeded(tmp_path, 3, "run")
+
+
+def test_episode_result_task_id_is_parameterized(tmp_path):
+    result = {
+        "schema_version": 1,
+        "task_id": "alohaminipro_fruits",
+        "attempt_id": tmp_path.name,
+        "reset_generation": 3,
+        "status": "success",
+        "reason": "simulator task-state reported success",
+        "terminal_stage": "retreat",
+        "started_at_s": 100.0,
+        "finished_at_s": 101.0,
+        "metrics": {"source": "/genie_sim/task_state/result"},
+    }
+    (tmp_path / record_sim.EPISODE_RESULT_FILENAME).write_text(
+        json.dumps(result), encoding="utf-8"
+    )
+    # The default c3_l1 collector must reject the fruits result...
+    assert not record_sim.episode_succeeded(tmp_path, 0, "run")
+    # ...and the matching task id must accept it.
+    assert record_sim.episode_succeeded(
+        tmp_path, 0, "run", task_id="alohaminipro_fruits"
+    )
+    assert not record_sim.episode_succeeded(
+        tmp_path, 0, "run", task_id="c3_l1"
+    )
 
 
 def test_load_raw_metadata_returns_count_summary_or_none(tmp_path):
@@ -158,7 +192,7 @@ def test_rejected_attempt_records_reset_generation_and_raw_metadata(monkeypatch,
 
     dataset = FakeDataset()
 
-    def fake_capture_attempt(_container, container_output, _episode_action):
+    def fake_capture_attempt(_container, container_output, _episode_action, _task_id=None):
         attempt_dir = tmp_path / ".record_sim_raw" / Path(container_output).name
         attempt_dir.mkdir(parents=True)
         raw_dir = attempt_dir / "raw"
@@ -271,7 +305,7 @@ def test_conversion_failure_deletes_attempt_and_continues(monkeypatch, tmp_path)
 
     dataset = FakeDataset()
 
-    def fake_capture_attempt(_container, container_output, _episode_action):
+    def fake_capture_attempt(_container, container_output, _episode_action, _task_id=None):
         attempt_dir = tmp_path / ".record_sim_raw" / Path(container_output).name
         attempt_dir.mkdir(parents=True)
         attempts.append(attempt_dir)

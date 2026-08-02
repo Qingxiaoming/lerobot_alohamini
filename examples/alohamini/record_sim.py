@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
-"""Automatically collect scripted C3-L1 simulator episodes into LeRobot."""
+"""Automatically collect scripted Genie Sim episodes into LeRobot.
+
+The collector is task-parameterized: ``--task`` selects the simulator task
+plugin whose episode script runs and whose structured result is validated
+(``c3_l1`` by default, ``alohaminipro_fruits`` for the fruits scene).
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ import bisect
 import json
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -208,12 +214,21 @@ def workspace_mount(inspect: dict[str, Any]) -> Path:
     return matches[0]
 
 
-def capture_attempt(container: str, container_output: str, episode_action: str) -> int:
+def capture_attempt(
+    container: str,
+    container_output: str,
+    episode_action: str,
+    task_id: str = "c3_l1",
+) -> int:
     command = [
         "docker",
         "exec",
         "-u",
         "1000:1000",
+        "-e",
+        f"GENIESIM_TASK={task_id}",
+        "-e",
+        f"GENIESIM_TASK_ID={task_id}",
         container,
         "bash",
         "-lc",
@@ -232,7 +247,7 @@ def capture_attempt(container: str, container_output: str, episode_action: str) 
     return subprocess.run(command, check=False).returncode
 
 
-def load_episode_result(attempt_dir: Path) -> dict[str, Any] | None:
+def load_episode_result(attempt_dir: Path, task_id: str = "c3_l1") -> dict[str, Any] | None:
     """Load a valid shared EpisodeResult correlated to this raw attempt."""
     path = attempt_dir / EPISODE_RESULT_FILENAME
     if not path.is_file():
@@ -262,7 +277,7 @@ def load_episode_result(attempt_dir: Path) -> dict[str, Any] | None:
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
         or schema_version != 1
-        or payload["task_id"] != "c3_l1"
+        or payload["task_id"] != task_id
     ):
         return None
     if payload["attempt_id"] != attempt_dir.name:
@@ -314,12 +329,17 @@ def load_raw_metadata(attempt_dir: Path) -> dict[str, Any] | None:
     return {key: payload[key] for key in keys if key in payload}
 
 
-def episode_succeeded(attempt_dir: Path, returncode: int, episode_action: str) -> bool:
+def episode_succeeded(
+    attempt_dir: Path,
+    returncode: int,
+    episode_action: str,
+    task_id: str = "c3_l1",
+) -> bool:
     if returncode != 0:
         return False
     if episode_action != "run":
         return True
-    result = load_episode_result(attempt_dir)
+    result = load_episode_result(attempt_dir, task_id)
     return result is not None and result["status"] == "success"
 
 
@@ -380,7 +400,7 @@ def append_episode(
             frame[f"observation.images.{camera}"] = raw.image(camera, sample.frame_index)
         dataset.add_frame(frame)
         if index and index % 250 == 0:
-            print(f"Converted {index}/{len(plan)} frames")
+            print(f"Converted {index}/{len(plan)} frames", flush=True)
     dataset.save_episode()
     return len(plan)
 
@@ -388,6 +408,15 @@ def append_episode(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True)
+    parser.add_argument(
+        "--task",
+        default="c3_l1",
+        choices=("c3_l1", "alohaminipro_fruits"),
+        help=(
+            "simulator task plugin whose episode script runs and whose "
+            "structured result is validated (default: c3_l1)"
+        ),
+    )
     parser.add_argument(
         "--root",
         type=Path,
@@ -450,14 +479,26 @@ def main() -> None:
             attempt_id = f"attempt-{attempt:04d}-{uuid.uuid4().hex[:8]}"
             attempt_dir = raw_root / attempt_id
             container_output = f"/workspace/.record_sim_raw/{attempt_id}"
-            print(f"Attempt {attempt}/{max_attempts}: {attempt_id}")
-            returncode = capture_attempt(args.container, container_output, args.episode_action)
+            attempt_started_s = time.monotonic()
+            print(f"Attempt {attempt}/{max_attempts}: {attempt_id}", flush=True)
+            returncode = capture_attempt(
+                args.container,
+                container_output,
+                args.episode_action,
+                args.task,
+            )
+            capture_elapsed_s = time.monotonic() - attempt_started_s
             episode_result = (
-                load_episode_result(attempt_dir)
+                load_episode_result(attempt_dir, args.task)
                 if args.episode_action == "run"
                 else None
             )
-            success = episode_succeeded(attempt_dir, returncode, args.episode_action)
+            success = episode_succeeded(
+                attempt_dir,
+                returncode,
+                args.episode_action,
+                args.task,
+            )
             if not success:
                 if episode_result is not None:
                     failure_reason = f"task_result_{episode_result['status']}"
@@ -478,7 +519,11 @@ def main() -> None:
                 if raw_metadata is not None:
                     failure_row["raw_metadata"] = raw_metadata
                 append_jsonl(session_log, failure_row)
-                print(f"Attempt failed (returncode={returncode}); episode was not added")
+                print(
+                    f"Attempt failed (returncode={returncode}); episode was not added "
+                    f"[capture {capture_elapsed_s:.1f}s]",
+                    flush=True,
+                )
                 if not args.keep_failed:
                     shutil.rmtree(attempt_dir, ignore_errors=True)
                 continue
@@ -533,7 +578,9 @@ def main() -> None:
             append_jsonl(session_log, success_row)
             print(
                 f"Saved successful episode {successes}/{args.num_episodes} "
-                f"({frame_count} frames)"
+                f"({frame_count} frames) [capture {capture_elapsed_s:.1f}s, "
+                f"convert {time.monotonic() - attempt_started_s - capture_elapsed_s:.1f}s]",
+                flush=True,
             )
             if not args.keep_raw:
                 shutil.rmtree(attempt_dir)
